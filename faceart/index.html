@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Face Art</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; width: 100vw; height: 100vh; font-family: 'Courier New', monospace; }
+
+  #artCanvas {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  }
+
+  #pip {
+    position: fixed; bottom: 20px; right: 20px;
+    width: 200px; height: 150px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-radius: 10px;
+    overflow: hidden;
+    background: #111;
+  }
+
+  #webcam {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+    display: block;
+  }
+
+  #faceCanvas {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    transform: scaleX(-1);
+  }
+
+  #statusBar {
+    position: fixed; top: 0; left: 0; right: 0;
+    padding: 10px 20px;
+    display: flex; align-items: center; gap: 12px;
+    background: rgba(0,0,0,0.5);
+    color: #fff;
+    font-size: 13px;
+    z-index: 10;
+  }
+
+  #statusDot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #f44; flex-shrink: 0;
+    transition: background 0.3s;
+  }
+  #statusDot.active { background: #4f4; }
+
+  #statusText { flex: 1; opacity: 0.8; }
+
+  #gestureDisplay {
+    font-size: 18px;
+    min-width: 120px;
+    text-align: right;
+    transition: opacity 0.3s;
+  }
+
+  #startOverlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.85);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    z-index: 20; color: #fff; text-align: center; gap: 20px;
+  }
+
+  #startOverlay h1 { font-size: 2.5rem; letter-spacing: 4px; color: #fff; }
+  #startOverlay p { font-size: 1rem; opacity: 0.6; max-width: 360px; line-height: 1.6; }
+
+  #startBtn {
+    margin-top: 10px;
+    padding: 14px 40px;
+    font-size: 1rem;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 2px;
+    background: transparent;
+    border: 2px solid #fff;
+    color: #fff;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.2s, color 0.2s;
+  }
+  #startBtn:hover { background: #fff; color: #000; }
+
+  #legend {
+    position: fixed; bottom: 20px; left: 20px;
+    color: rgba(255,255,255,0.5);
+    font-size: 11px;
+    line-height: 1.8;
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="artCanvas"></canvas>
+
+<div id="statusBar">
+  <div id="statusDot"></div>
+  <span id="statusText">Click START to begin</span>
+  <span id="gestureDisplay"></span>
+</div>
+
+<div id="pip">
+  <video id="webcam" autoplay playsinline muted></video>
+  <canvas id="faceCanvas"></canvas>
+</div>
+
+<div id="legend">
+  😉 wink left → hearts &nbsp; 😉 wink right → stars<br>
+  😄 smile → rainbow &nbsp; ☹️ frown → rain cloud<br>
+  😲 blink → explosion &nbsp; 🤔 nod → bubbles &nbsp; 🙂 shake → swirl
+</div>
+
+<div id="startOverlay">
+  <h1>FACE ART</h1>
+  <p>Your face becomes a brush. Blink, smile, nod and shake to paint the canvas.</p>
+  <button id="startBtn">START</button>
+</div>
+
+<script type="module">
+import { FaceLandmarker, FilesetResolver }
+  from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs';
+
+// ─── file:// guard ────────────────────────────────────────────────────────────
+if (location.protocol === 'file:') {
+  document.getElementById('startOverlay').innerHTML = `
+    <h1>FACE ART</h1>
+    <p style="color:#f88">This page must be served over HTTP — it cannot run from a <code>file://</code> URL because the browser blocks loading WebAssembly from a CDN in that context.</p>
+    <p>Run a local server and open it there:</p>
+    <pre style="background:#111;padding:14px 20px;border-radius:6px;font-size:0.9rem;text-align:left;margin-top:4px">npx serve .<br># then visit http://localhost:3000/faceart/</pre>`;
+  throw new Error('file:// not supported');
+}
+
+// ─── Canvas & state ───────────────────────────────────────────────────────────
+const artCanvas = document.getElementById('artCanvas');
+const ctx = artCanvas.getContext('2d');
+const faceCanvas = document.getElementById('faceCanvas');
+const faceCtx = faceCanvas.getContext('2d');
+const webcam = document.getElementById('webcam');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const gestureDisplay = document.getElementById('gestureDisplay');
+
+function resize() {
+  artCanvas.width = window.innerWidth;
+  artCanvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ─── Art objects ──────────────────────────────────────────────────────────────
+const particles = [];
+const hearts = [];
+const stars = [];
+const rainbows = [];
+const clouds = [];
+const bubbles = [];
+const swirls = [];
+
+// Background hue cycling
+let bgHue = 220;
+
+// ─── Particle ────────────────────────────────────────────────────────────────
+class Particle {
+  constructor(x, y, color, vx, vy, radius = 4) {
+    this.x = x; this.y = y;
+    this.vx = vx; this.vy = vy;
+    this.color = color;
+    this.alpha = 1;
+    this.radius = radius;
+    this.decay = 0.012 + Math.random() * 0.018;
+    this.gravity = 0.12;
+    this.drag = 0.97;
+  }
+  update() {
+    this.vy += this.gravity;
+    this.vx *= this.drag;
+    this.vy *= this.drag;
+    this.x += this.vx;
+    this.y += this.vy;
+    this.alpha -= this.decay;
+    this.radius *= 0.995;
+  }
+  draw(c) {
+    c.save();
+    c.globalAlpha = Math.max(0, this.alpha);
+    c.fillStyle = this.color;
+    c.beginPath();
+    c.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    c.fill();
+    c.restore();
+  }
+  get dead() { return this.alpha <= 0 || this.radius < 0.5; }
+}
+
+function spawnExplosion(x, y) {
+  const count = 50 + Math.floor(Math.random() * 20);
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 * i) / count + Math.random() * 0.3;
+    const speed = 4 + Math.random() * 8;
+    const hue = Math.random() * 360;
+    const color = `hsl(${hue},100%,60%)`;
+    particles.push(new Particle(x, y, color,
+      Math.cos(angle) * speed, Math.sin(angle) * speed,
+      3 + Math.random() * 5));
+  }
+  // Also a few bigger blobs
+  for (let i = 0; i < 8; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 2 + Math.random() * 4;
+    const hue = Math.random() * 360;
+    particles.push(new Particle(x, y, `hsl(${hue},100%,70%)`,
+      Math.cos(angle) * speed, Math.sin(angle) * speed, 12 + Math.random() * 12));
+  }
+}
+
+// ─── Heart ────────────────────────────────────────────────────────────────────
+class Heart {
+  constructor(x, y) {
+    this.x = x + (Math.random() - 0.5) * 60;
+    this.y = y;
+    this.size = 20 + Math.random() * 20;
+    this.alpha = 1;
+    this.vy = -(1.5 + Math.random() * 2);
+    this.vx = (Math.random() - 0.5) * 1.5;
+    this.hue = 340 + Math.random() * 40;
+    this.rotation = (Math.random() - 0.5) * 0.5;
+    this.rotSpeed = (Math.random() - 0.5) * 0.04;
+  }
+  update() {
+    this.y += this.vy;
+    this.x += this.vx;
+    this.vy *= 0.99;
+    this.rotation += this.rotSpeed;
+    this.alpha -= 0.008;
+    this.size *= 0.998;
+  }
+  draw(c) {
+    const s = this.size;
+    c.save();
+    c.translate(this.x, this.y);
+    c.rotate(this.rotation);
+    c.globalAlpha = Math.max(0, this.alpha);
+    c.fillStyle = `hsl(${this.hue},100%,65%)`;
+    c.beginPath();
+    c.moveTo(0, s * 0.3);
+    c.bezierCurveTo(-s * 0.5, -s * 0.2, -s, s * 0.2, 0, s * 0.8);
+    c.bezierCurveTo(s, s * 0.2, s * 0.5, -s * 0.2, 0, s * 0.3);
+    c.fill();
+    c.restore();
+  }
+  get dead() { return this.alpha <= 0; }
+}
+
+function spawnHearts(x, y) {
+  for (let i = 0; i < 7; i++) hearts.push(new Heart(x, y));
+}
+
+// ─── Star ─────────────────────────────────────────────────────────────────────
+class Star {
+  constructor(x, y) {
+    this.x = x + (Math.random() - 0.5) * 80;
+    this.y = y + (Math.random() - 0.5) * 80;
+    this.size = 10 + Math.random() * 20;
+    this.alpha = 1;
+    this.vx = (Math.random() - 0.5) * 5;
+    this.vy = (Math.random() - 0.5) * 5 - 1;
+    this.rotation = Math.random() * Math.PI;
+    this.rotSpeed = (Math.random() - 0.5) * 0.1;
+    this.hue = 40 + Math.random() * 60;
+  }
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    this.vx *= 0.96;
+    this.vy *= 0.96;
+    this.rotation += this.rotSpeed;
+    this.alpha -= 0.01;
+    this.size *= 0.995;
+  }
+  draw(c) {
+    c.save();
+    c.translate(this.x, this.y);
+    c.rotate(this.rotation);
+    c.globalAlpha = Math.max(0, this.alpha);
+    c.fillStyle = `hsl(${this.hue},100%,70%)`;
+    c.shadowColor = `hsl(${this.hue},100%,80%)`;
+    c.shadowBlur = 10;
+    const n = 5, r1 = this.size, r2 = this.size * 0.4;
+    c.beginPath();
+    for (let i = 0; i < n * 2; i++) {
+      const r = i % 2 === 0 ? r1 : r2;
+      const angle = (Math.PI * i) / n - Math.PI / 2;
+      i === 0 ? c.moveTo(Math.cos(angle) * r, Math.sin(angle) * r)
+              : c.lineTo(Math.cos(angle) * r, Math.sin(angle) * r);
+    }
+    c.closePath();
+    c.fill();
+    c.restore();
+  }
+  get dead() { return this.alpha <= 0; }
+}
+
+function spawnStars(x, y) {
+  for (let i = 0; i < 12; i++) stars.push(new Star(x, y));
+}
+
+// ─── Rainbow ──────────────────────────────────────────────────────────────────
+class Rainbow {
+  constructor(x, y) {
+    this.cx = x;
+    this.cy = y + 40;
+    this.radius = 120 + Math.random() * 60;
+    this.alpha = 0;
+    this.phase = 'in'; // in → hold → out
+    this.holdTimer = 0;
+    this.lineWidth = 18;
+  }
+  update() {
+    if (this.phase === 'in') {
+      this.alpha += 0.04;
+      if (this.alpha >= 0.8) { this.alpha = 0.8; this.phase = 'hold'; }
+    } else if (this.phase === 'hold') {
+      this.holdTimer++;
+      if (this.holdTimer > 80) this.phase = 'out';
+    } else {
+      this.alpha -= 0.012;
+    }
+    this.radius += 0.3;
+  }
+  draw(c) {
+    const colors = ['#FF0000','#FF7700','#FFFF00','#00CC00','#0000FF','#8800FF','#FF00FF'];
+    c.save();
+    c.globalAlpha = Math.max(0, this.alpha);
+    colors.forEach((col, i) => {
+      const r = this.radius - i * (this.lineWidth + 2);
+      if (r <= 0) return;
+      c.beginPath();
+      c.arc(this.cx, this.cy, r, Math.PI, 0, false);
+      c.strokeStyle = col;
+      c.lineWidth = this.lineWidth;
+      c.stroke();
+    });
+    c.restore();
+  }
+  get dead() { return this.phase === 'out' && this.alpha <= 0; }
+}
+
+function spawnRainbow(x, y) {
+  rainbows.push(new Rainbow(x, y));
+}
+
+// ─── Rain Cloud ───────────────────────────────────────────────────────────────
+class RainDrop extends Particle {
+  constructor(x, y) {
+    super(x, y, 'rgba(100,140,200,0.7)',
+      (Math.random() - 0.5) * 1, 2 + Math.random() * 3, 1.5);
+    this.gravity = 0.05;
+    this.drag = 1;
+    this.decay = 0.02;
+  }
+}
+
+class RainCloud {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y - 60;
+    this.vx = (Math.random() < 0.5 ? -1 : 1) * (0.4 + Math.random() * 0.6);
+    this.alpha = 0;
+    this.phase = 'in';
+    this.holdTimer = 0;
+    this.drops = [];
+    this.dropTimer = 0;
+    this.w = 140 + Math.random() * 60;
+    this.h = 55;
+  }
+  update() {
+    this.x += this.vx;
+    if (this.phase === 'in') {
+      this.alpha += 0.025;
+      if (this.alpha >= 0.85) { this.alpha = 0.85; this.phase = 'hold'; }
+    } else if (this.phase === 'hold') {
+      this.holdTimer++;
+      if (this.holdTimer > 160) this.phase = 'out';
+    } else {
+      this.alpha -= 0.008;
+    }
+    // Spawn rain
+    if (this.phase !== 'out' && this.alpha > 0.3) {
+      this.dropTimer++;
+      if (this.dropTimer % 4 === 0) {
+        this.drops.push(new RainDrop(
+          this.x + (Math.random() - 0.5) * this.w * 0.8,
+          this.y + this.h * 0.6));
+      }
+    }
+    this.drops.forEach(d => d.update());
+    for (let i = this.drops.length - 1; i >= 0; i--) {
+      if (this.drops[i].dead) this.drops.splice(i, 1);
+    }
+  }
+  draw(c) {
+    c.save();
+    c.globalAlpha = Math.max(0, this.alpha);
+    // Drops
+    this.drops.forEach(d => d.draw(c));
+    // Cloud body
+    const grd = c.createRadialGradient(this.x, this.y, 10, this.x, this.y, this.w * 0.6);
+    grd.addColorStop(0, '#555');
+    grd.addColorStop(1, '#222');
+    c.fillStyle = grd;
+    this._drawCloudShape(c);
+    c.fill();
+    c.restore();
+  }
+  _drawCloudShape(c) {
+    const x = this.x, y = this.y, w = this.w, h = this.h;
+    c.beginPath();
+    c.ellipse(x, y + h * 0.2, w * 0.5, h * 0.45, 0, 0, Math.PI * 2);
+    c.ellipse(x - w * 0.28, y + h * 0.3, w * 0.3, h * 0.35, 0, 0, Math.PI * 2);
+    c.ellipse(x + w * 0.28, y + h * 0.3, w * 0.3, h * 0.35, 0, 0, Math.PI * 2);
+    c.ellipse(x - w * 0.12, y, w * 0.28, h * 0.38, 0, 0, Math.PI * 2);
+    c.ellipse(x + w * 0.12, y, w * 0.28, h * 0.38, 0, 0, Math.PI * 2);
+  }
+  get dead() { return this.phase === 'out' && this.alpha <= 0; }
+}
+
+function spawnCloud(x, y) {
+  clouds.push(new RainCloud(x, y));
+}
+
+// ─── Bubble ───────────────────────────────────────────────────────────────────
+class Bubble {
+  constructor(x, y) {
+    this.x = x + (Math.random() - 0.5) * 100;
+    this.y = y;
+    this.radius = 12 + Math.random() * 20;
+    this.vy = -(1 + Math.random() * 2);
+    this.vx = (Math.random() - 0.5) * 1;
+    this.alpha = 0.6 + Math.random() * 0.3;
+    this.hue = Math.random() * 360;
+    this.popped = false;
+    this.popAlpha = 1;
+    this.popR = 0;
+  }
+  update() {
+    if (this.popped) {
+      this.popR += 3;
+      this.popAlpha -= 0.08;
+      return;
+    }
+    this.y += this.vy;
+    this.x += this.vx;
+    this.vx += (Math.random() - 0.5) * 0.1;
+    if (this.y < artCanvas.height * 0.15 + Math.random() * 80) {
+      this.popped = true;
+    }
+  }
+  draw(c) {
+    if (this.popped) {
+      c.save();
+      c.globalAlpha = Math.max(0, this.popAlpha * 0.5);
+      c.beginPath();
+      c.arc(this.x, this.y, this.popR, 0, Math.PI * 2);
+      c.strokeStyle = `hsl(${this.hue},80%,70%)`;
+      c.lineWidth = 2;
+      c.stroke();
+      c.restore();
+      return;
+    }
+    c.save();
+    c.globalAlpha = this.alpha;
+    // Bubble
+    const grad = c.createRadialGradient(
+      this.x - this.radius * 0.3, this.y - this.radius * 0.3, 0,
+      this.x, this.y, this.radius);
+    grad.addColorStop(0, `hsla(${this.hue},60%,90%,0.6)`);
+    grad.addColorStop(0.7, `hsla(${this.hue},70%,60%,0.15)`);
+    grad.addColorStop(1, `hsla(${this.hue},80%,70%,0.4)`);
+    c.beginPath();
+    c.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    c.fillStyle = grad;
+    c.fill();
+    c.strokeStyle = `hsla(${this.hue},80%,80%,0.6)`;
+    c.lineWidth = 1.5;
+    c.stroke();
+    // Specular
+    c.beginPath();
+    c.arc(this.x - this.radius * 0.3, this.y - this.radius * 0.35, this.radius * 0.2, 0, Math.PI * 2);
+    c.fillStyle = 'rgba(255,255,255,0.4)';
+    c.fill();
+    c.restore();
+  }
+  get dead() { return this.popped && this.popAlpha <= 0; }
+}
+
+function spawnBubbles(x, y) {
+  const count = 6 + Math.floor(Math.random() * 5);
+  for (let i = 0; i < count; i++) bubbles.push(new Bubble(x, y));
+}
+
+// ─── Color Swirl ──────────────────────────────────────────────────────────────
+class ColorSwirl {
+  constructor(x, y) {
+    this.cx = x; this.cy = y;
+    this.alpha = 0.9;
+    this.rotation = 0;
+    this.maxRadius = 20;
+    this.growing = true;
+    this.baseHue = Math.random() * 360;
+    this.arms = 6;
+    this.decay = 0.006;
+  }
+  update() {
+    this.rotation += 0.04;
+    if (this.growing) {
+      this.maxRadius += 4;
+      if (this.maxRadius > 220) this.growing = false;
+    }
+    this.alpha -= this.decay;
+  }
+  draw(c) {
+    c.save();
+    c.globalAlpha = Math.max(0, this.alpha);
+    c.translate(this.cx, this.cy);
+    c.rotate(this.rotation);
+    for (let arm = 0; arm < this.arms; arm++) {
+      const armAngle = (Math.PI * 2 * arm) / this.arms;
+      const hue = (this.baseHue + arm * (360 / this.arms)) % 360;
+      const steps = 24;
+      for (let s = 0; s < steps; s++) {
+        const t = s / steps;
+        const r = t * this.maxRadius;
+        const angle = armAngle + t * Math.PI * 3;
+        const px = Math.cos(angle) * r;
+        const py = Math.sin(angle) * r;
+        const size = (1 - t) * 10 + 2;
+        c.beginPath();
+        c.arc(px, py, size, 0, Math.PI * 2);
+        c.fillStyle = `hsl(${hue},100%,65%)`;
+        c.globalAlpha = Math.max(0, this.alpha * (1 - t * 0.6));
+        c.fill();
+      }
+    }
+    c.restore();
+  }
+  get dead() { return this.alpha <= 0; }
+}
+
+function spawnSwirl(x, y) {
+  swirls.push(new ColorSwirl(x, y));
+}
+
+// ─── Gesture detection ────────────────────────────────────────────────────────
+const smoothed = {};
+const ALPHA = 0.35;
+const cooldowns = {};
+
+function smooth(key, val) {
+  smoothed[key] = (smoothed[key] === undefined) ? val : smoothed[key] * (1 - ALPHA) + val * ALPHA;
+  return smoothed[key];
+}
+
+function canTrigger(key, ms) {
+  const now = Date.now();
+  if (!cooldowns[key] || now - cooldowns[key] > ms) {
+    cooldowns[key] = now;
+    return true;
+  }
+  return false;
+}
+
+// Nose history for nod/shake
+const noseHistory = [];
+const NOSE_HISTORY_MS = 700;
+
+function recordNose(nx, ny) {
+  const now = Date.now();
+  noseHistory.push({ nx, ny, t: now });
+  // Prune old
+  while (noseHistory.length > 0 && now - noseHistory[0].t > NOSE_HISTORY_MS * 1.5) {
+    noseHistory.shift();
+  }
+}
+
+function detectNod() {
+  if (noseHistory.length < 6) return false;
+  const recent = noseHistory.filter(p => Date.now() - p.t < NOSE_HISTORY_MS);
+  if (recent.length < 4) return false;
+  const ys = recent.map(p => p.ny);
+  const min = Math.min(...ys), max = Math.max(...ys);
+  return (max - min) > 0.045;
+}
+
+function detectShake() {
+  if (noseHistory.length < 6) return false;
+  const recent = noseHistory.filter(p => Date.now() - p.t < NOSE_HISTORY_MS);
+  if (recent.length < 4) return false;
+  const xs = recent.map(p => p.nx);
+  const min = Math.min(...xs), max = Math.max(...xs);
+  return (max - min) > 0.055;
+}
+
+function getBlendshape(blendshapes, name) {
+  if (!blendshapes || !blendshapes[0]) return 0;
+  const cat = blendshapes[0].categories.find(c => c.categoryName === name);
+  return cat ? cat.score : 0;
+}
+
+function processGestures(result, faceX, faceY) {
+  const bs = result.faceBlendshapes;
+
+  const blinkL = smooth('blinkL', getBlendshape(bs, 'eyeBlinkLeft'));
+  const blinkR = smooth('blinkR', getBlendshape(bs, 'eyeBlinkRight'));
+  const smileL = smooth('smileL', getBlendshape(bs, 'mouthSmileLeft'));
+  const smileR = smooth('smileR', getBlendshape(bs, 'mouthSmileRight'));
+  const frownL = smooth('frownL', getBlendshape(bs, 'mouthFrownLeft'));
+  const frownR = smooth('frownR', getBlendshape(bs, 'mouthFrownRight'));
+
+  const avgSmile = (smileL + smileR) / 2;
+  const avgFrown = (frownL + frownR) / 2;
+
+  let gestureLabel = '';
+
+  // Blink (both eyes)
+  if (blinkL > 0.45 && blinkR > 0.45 && canTrigger('blink', 400)) {
+    spawnExplosion(faceX, faceY);
+    gestureLabel = '😲 BLINK!';
+  }
+  // Wink left (left eye closed, right open)
+  else if (blinkL > 0.5 && blinkR < 0.25 && canTrigger('winkL', 600)) {
+    spawnHearts(faceX, faceY);
+    gestureLabel = '😉 WINK LEFT';
+  }
+  // Wink right
+  else if (blinkR > 0.5 && blinkL < 0.25 && canTrigger('winkR', 600)) {
+    spawnStars(faceX, faceY);
+    gestureLabel = '✨ WINK RIGHT';
+  }
+
+  // Smile
+  if (avgSmile > 0.4 && canTrigger('smile', 1200)) {
+    spawnRainbow(faceX, faceY);
+    gestureLabel = '😄 SMILE!';
+  }
+
+  // Frown
+  if (avgFrown > 0.3 && canTrigger('frown', 1500)) {
+    spawnCloud(faceX, faceY);
+    gestureLabel = '☁️ FROWN';
+  }
+
+  // Nod
+  if (detectNod() && canTrigger('nod', 900)) {
+    spawnBubbles(faceX, faceY);
+    gestureLabel = '🫧 NOD';
+  }
+
+  // Head shake
+  if (detectShake() && canTrigger('shake', 900)) {
+    spawnSwirl(faceX, faceY);
+    gestureLabel = '🌀 SHAKE';
+  }
+
+  if (gestureLabel) {
+    gestureDisplay.textContent = gestureLabel;
+    clearTimeout(gestureDisplay._timer);
+    gestureDisplay._timer = setTimeout(() => { gestureDisplay.textContent = ''; }, 1500);
+  }
+}
+
+// ─── Drawing the art frame ────────────────────────────────────────────────────
+function drawFrame() {
+  const W = artCanvas.width, H = artCanvas.height;
+
+  // Slow background fade (trail effect)
+  ctx.fillStyle = `hsla(${bgHue},30%,5%,0.18)`;
+  ctx.fillRect(0, 0, W, H);
+  bgHue = (bgHue + 0.04) % 360;
+
+  // Update & draw all objects
+  function updateList(arr) {
+    for (let i = arr.length - 1; i >= 0; i--) {
+      arr[i].update();
+      arr[i].draw(ctx);
+      if (arr[i].dead) arr.splice(i, 1);
+    }
+  }
+
+  updateList(particles);
+  updateList(hearts);
+  updateList(stars);
+  updateList(rainbows);
+  updateList(clouds);
+  updateList(bubbles);
+  updateList(swirls);
+}
+
+// ─── Face overlay drawing ─────────────────────────────────────────────────────
+function drawFaceOverlay(landmarks) {
+  faceCtx.clearRect(0, 0, faceCanvas.width, faceCanvas.height);
+  if (!landmarks || !landmarks[0]) return;
+
+  const pts = landmarks[0];
+  const W = faceCanvas.width, H = faceCanvas.height;
+
+  faceCtx.fillStyle = 'rgba(0,255,180,0.7)';
+  for (let i = 0; i < pts.length; i += 3) {
+    const lm = pts[i];
+    // Note: landmarks are in normalized [0,1] coords; video is mirrored via CSS so we flip x
+    faceCtx.beginPath();
+    faceCtx.arc(lm.x * W, lm.y * H, 0.8, 0, Math.PI * 2);
+    faceCtx.fill();
+  }
+}
+
+// ─── MediaPipe setup ──────────────────────────────────────────────────────────
+let faceLandmarker = null;
+let animFrameId = null;
+let lastVideoTime = -1;
+
+async function initMediaPipe() {
+  statusText.textContent = 'Loading AI model…';
+
+  const vision = await FilesetResolver.forVisionTasks(
+    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
+  );
+
+  faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+      delegate: 'GPU'
+    },
+    outputFaceBlendshapes: true,
+    runningMode: 'VIDEO',
+    numFaces: 1
+  });
+
+  statusText.textContent = 'Requesting camera…';
+  await initCamera();
+}
+
+async function initCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+      audio: false
+    });
+    webcam.srcObject = stream;
+    await new Promise(res => { webcam.onloadedmetadata = res; });
+    webcam.play();
+
+    faceCanvas.width = 200;
+    faceCanvas.height = 150;
+
+    statusDot.classList.add('active');
+    statusText.textContent = 'Face tracking active — make some faces!';
+    startLoop();
+  } catch (e) {
+    statusText.textContent = 'Camera access denied — please allow camera and reload.';
+    console.error(e);
+  }
+}
+
+function startLoop() {
+  function loop() {
+    animFrameId = requestAnimationFrame(loop);
+    drawFrame();
+
+    if (!faceLandmarker || !webcam.videoWidth) return;
+    if (webcam.currentTime === lastVideoTime) return;
+    lastVideoTime = webcam.currentTime;
+
+    const result = faceLandmarker.detectForVideo(webcam, performance.now());
+
+    if (result.faceLandmarks && result.faceLandmarks[0]) {
+      const lms = result.faceLandmarks[0];
+      // Nose tip = landmark index 1 (MediaPipe 478-point model)
+      const nose = lms[1];
+      recordNose(nose.x, nose.y);
+
+      // Map normalized nose position to canvas — flip x because video is mirrored
+      const faceX = (1 - nose.x) * artCanvas.width;
+      const faceY = nose.y * artCanvas.height;
+
+      drawFaceOverlay(result.faceLandmarks);
+      processGestures(result, faceX, faceY);
+    } else {
+      faceCtx.clearRect(0, 0, faceCanvas.width, faceCanvas.height);
+    }
+  }
+  loop();
+}
+
+// ─── Start button ─────────────────────────────────────────────────────────────
+document.getElementById('startBtn').addEventListener('click', async () => {
+  document.getElementById('startOverlay').style.display = 'none';
+  await initMediaPipe();
+});
+</script>
+</body>
+</html>
