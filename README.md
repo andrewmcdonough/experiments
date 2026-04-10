@@ -2,4 +2,4 @@
 
 A few experimental projects.
 
-* sequencer: A web-based step sequencer
+* [sequencer](https://experiments.andrewmcdonough.com/sequencer/): A web-based step sequencer
