@@ -258,9 +258,9 @@ function rotatePoint(lx, ly, angle, cx, cy) {
 const BEAM_COLORS = ['#FF0000','#FF7700','#FFFF00','#00CC00','#0088FF','#8800FF','#FF00FF'];
 
 class RainbowBeam {
-  constructor(x, y, dir) { // dir: -1 = left, 1 = right
+  constructor(x, y, beamAngle) {
     this.x = x; this.y = y;
-    this.dir = dir;
+    this.angle = beamAngle; // radians
     this.length = 10;
     this.alpha = 1;
     this.age = 0;
@@ -273,12 +273,16 @@ class RainbowBeam {
   draw(c) {
     c.save();
     c.globalAlpha = Math.max(0, this.alpha);
-    const spacing = 7;
+    const dx = Math.cos(this.angle);
+    const dy = Math.sin(this.angle);
+    // Perpendicular to beam direction, for stacking the colour stripes
+    const px = -dy, py = dx;
+    const spacing = 6;
     BEAM_COLORS.forEach((col, i) => {
-      const offsetY = (i - 3) * spacing;
+      const off = (i - 3) * spacing;
       c.beginPath();
-      c.moveTo(this.x, this.y + offsetY);
-      c.lineTo(this.x + this.dir * this.length, this.y + offsetY);
+      c.moveTo(this.x + px * off, this.y + py * off);
+      c.lineTo(this.x + px * off + dx * this.length, this.y + py * off + dy * this.length);
       c.strokeStyle = col;
       c.lineWidth = 5;
       c.shadowColor = col;
@@ -291,8 +295,10 @@ class RainbowBeam {
 }
 
 function spawnRainbowBeams() {
-  rainbowBeams.push(new RainbowBeam(leftEyeWorld.x, leftEyeWorld.y, -1));
-  rainbowBeams.push(new RainbowBeam(rightEyeWorld.x, rightEyeWorld.y, 1));
+  // 210° = upper-left in canvas coords (left + slightly up)
+  // 330° = upper-right in canvas coords (right + slightly up)
+  rainbowBeams.push(new RainbowBeam(leftEyeWorld.x,  leftEyeWorld.y,  Math.PI * 7 / 6));
+  rainbowBeams.push(new RainbowBeam(rightEyeWorld.x, rightEyeWorld.y, Math.PI * 11 / 6));
 }
 
 // ─── HornSparkle (particle) ──────────────────────────────────────────────────
@@ -454,152 +460,173 @@ class LightningBolt {
 
 // ─── Unicorn head drawing ─────────────────────────────────────────────────────
 function drawUnicornHead(cx, cy, angle, scale, smiling, fc) {
+  const R = scale; // head radius
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(angle);
 
-  const hw = scale;        // half-width reference
-  const hh = scale * 1.2; // half-height reference
-
-  // ── Mane (behind head) ──
-  const maneHues = [0, 45, 100, 180, 240, 290, 340];
-  for (let i = 0; i < 7; i++) {
-    const hue = (fc * 1.2 + i * 52) % 360;
-    const offset = i * 8 - 24;
+  // Helper: draw a hair lock as a teardrop from (tipX,tipY) to (endX,endY)
+  function drawLock(tipX, tipY, endX, endY, halfW, color) {
+    const dx = endX - tipX, dy = endY - tipY;
+    const len = Math.hypot(dx, dy) || 1;
+    const px = -dy / len * halfW, py = dx / len * halfW;
     ctx.save();
-    ctx.globalAlpha = 0.85;
-    ctx.strokeStyle = `hsl(${hue},100%,65%)`;
-    ctx.lineWidth = 10;
-    ctx.lineCap = 'round';
-    ctx.shadowColor = `hsl(${hue},100%,75%)`;
-    ctx.shadowBlur = 8;
+    ctx.fillStyle = color;
     ctx.beginPath();
-    // Mane curves on the left side of the head
-    ctx.moveTo(-hw * 0.55 + offset * 0.2, -hh * 0.5);
-    ctx.bezierCurveTo(
-      -hw * 1.1 + offset * 0.3, -hh * 0.2,
-      -hw * 1.2 + offset * 0.3,  hh * 0.3,
-      -hw * 0.7 + offset * 0.2,  hh * 0.55
-    );
-    ctx.stroke();
+    ctx.moveTo(tipX, tipY);
+    ctx.quadraticCurveTo(tipX + px * 0.7, tipY + py * 0.7, endX + px, endY + py);
+    ctx.arc(endX, endY, halfW, Math.atan2(py, px), Math.atan2(-py, -px), false);
+    ctx.quadraticCurveTo(tipX - px * 0.7, tipY - py * 0.7, tipX, tipY);
+    ctx.closePath();
+    ctx.fill();
     ctx.restore();
   }
 
-  // ── Head oval ──
+  // ── Ears (behind head) ──
+  [-1, 1].forEach(side => {
+    const ex = side * R * 0.72, ey = -R * 0.65;
+    ctx.save();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.ellipse(ex, ey, R * 0.24, R * 0.32, side * 0.28, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffb6c8';
+    ctx.beginPath();
+    ctx.ellipse(ex + side * R * 0.02, ey + R * 0.03, R * 0.14, R * 0.19, side * 0.28, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  });
+
+  // ── Head circle ──
   ctx.save();
-  const headGrad = ctx.createRadialGradient(-hw * 0.1, -hh * 0.1, hw * 0.05, 0, 0, hw * 1.1);
-  headGrad.addColorStop(0, '#fff8fc');
-  headGrad.addColorStop(0.6, '#f0e0ff');
-  headGrad.addColorStop(1, '#d8b8ff');
-  ctx.fillStyle = headGrad;
-  ctx.shadowColor = `rgba(180,100,255,0.35)`;
-  ctx.shadowBlur = 20;
+  ctx.fillStyle = '#ffffff';
+  ctx.shadowColor = 'rgba(120,80,180,0.18)';
+  ctx.shadowBlur = 18;
   ctx.beginPath();
-  ctx.ellipse(0, hh * 0.05, hw * 0.7, hh * 0.78, 0, 0, Math.PI * 2);
+  ctx.arc(0, 0, R, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
+  // ── Rainbow forelock (back → front: purple, blue, pink, yellow) ──
+  const lockBase = { x: 0, y: -R * 0.86 };
+  const lockDefs = [
+    { ex: R*0.52,  ey: -R*0.32, hw: R*0.21, color: '#a855f7' }, // purple (back)
+    { ex: R*0.22,  ey: -R*0.12, hw: R*0.21, color: '#50c0f0' }, // blue
+    { ex: -R*0.06, ey:  R*0.02, hw: R*0.24, color: '#f72585' }, // pink (center, largest)
+    { ex: -R*0.42, ey: -R*0.18, hw: R*0.21, color: '#f7c948' }, // yellow (front)
+  ];
+  lockDefs.forEach(l => drawLock(lockBase.x, lockBase.y, l.ex, l.ey, l.hw, l.color));
+
   // ── Horn ──
   ctx.save();
-  const hornH = scale * 0.95;
-  const hornBase = scale * 0.14;
-  // Horn gradient - rainbow when smiling
-  let hornGrad;
+  const hornBaseY = -R * 0.9;
+  const hornTipY  = -R * 2.0;
+  const hornBaseW = R * 0.11;
+
+  const hornGrad = ctx.createLinearGradient(0, hornBaseY, 0, hornTipY);
   if (smiling) {
-    hornGrad = ctx.createLinearGradient(0, -hh * 0.55, 0, -hh * 0.55 - hornH);
-    const shimHue = (fc * 4) % 360;
-    hornGrad.addColorStop(0,   `hsl(${shimHue},100%,60%)`);
-    hornGrad.addColorStop(0.25, `hsl(${(shimHue+60)%360},100%,65%)`);
-    hornGrad.addColorStop(0.5,  `hsl(${(shimHue+120)%360},100%,65%)`);
-    hornGrad.addColorStop(0.75, `hsl(${(shimHue+200)%360},100%,65%)`);
-    hornGrad.addColorStop(1,    `hsl(${(shimHue+280)%360},100%,70%)`);
-    ctx.shadowColor = `hsl(${shimHue},100%,70%)`;
-    ctx.shadowBlur = 30;
+    const sh = (fc * 4) % 360;
+    hornGrad.addColorStop(0,    `hsl(${sh},100%,62%)`);
+    hornGrad.addColorStop(0.33, `hsl(${(sh+90)%360},100%,65%)`);
+    hornGrad.addColorStop(0.66, `hsl(${(sh+180)%360},100%,65%)`);
+    hornGrad.addColorStop(1,    `hsl(${(sh+270)%360},100%,72%)`);
+    ctx.shadowColor = `hsl(${sh},100%,75%)`;
+    ctx.shadowBlur = 28;
   } else {
-    hornGrad = ctx.createLinearGradient(0, -hh * 0.55, 0, -hh * 0.55 - hornH);
-    hornGrad.addColorStop(0, '#e8c0ff');
-    hornGrad.addColorStop(1, '#ffffff');
-    ctx.shadowColor = 'rgba(200,140,255,0.4)';
-    ctx.shadowBlur = 10;
+    hornGrad.addColorStop(0, '#e8d040');
+    hornGrad.addColorStop(0.6, '#f5e880');
+    hornGrad.addColorStop(1, '#fffce0');
+    ctx.shadowColor = 'rgba(210,190,60,0.3)';
+    ctx.shadowBlur = 6;
   }
   ctx.fillStyle = hornGrad;
   ctx.beginPath();
-  ctx.moveTo(-hornBase, -hh * 0.52);
-  ctx.lineTo(hornBase,  -hh * 0.52);
-  ctx.lineTo(0, -hh * 0.52 - hornH);
+  ctx.moveTo(-hornBaseW, hornBaseY);
+  ctx.lineTo( hornBaseW, hornBaseY);
+  ctx.lineTo(0, hornTipY);
   ctx.closePath();
   ctx.fill();
 
   // Horn spiral lines
-  ctx.strokeStyle = smiling ? `hsl(${(fc*3)%360},100%,80%)` : 'rgba(255,255,255,0.5)';
-  ctx.lineWidth = 1.5;
-  ctx.shadowBlur = smiling ? 15 : 5;
-  for (let s = 0; s < 5; s++) {
-    const t = s / 5;
-    const sx = -hornBase * (1 - t) + hornBase * (1 - t) * 0.5;
-    const sy = -hh * 0.52 - hornH * t;
-    const ex = -hornBase * (1 - t) * 0.3;
-    const ey = sy;
+  ctx.strokeStyle = smiling ? `hsla(${(fc*3)%360},100%,88%,0.9)` : 'rgba(160,130,10,0.55)';
+  ctx.lineWidth = Math.max(0.8, R * 0.012);
+  ctx.lineCap = 'round';
+  ctx.shadowBlur = 0;
+  for (let i = 1; i <= 6; i++) {
+    const t = i / 7;
+    const y = hornBaseY + (hornTipY - hornBaseY) * t;
+    const w = hornBaseW * (1 - t);
     ctx.beginPath();
-    ctx.moveTo(-hornBase * (1 - t) * 0.8, sy);
-    ctx.lineTo(hornBase * (1 - t) * 0.8, sy);
+    ctx.moveTo(-w * 0.9, y);
+    ctx.lineTo( w * 0.5, y - R * 0.05 * (1 - t));
     ctx.stroke();
   }
   ctx.restore();
 
+  // ── Eyebrows ──
+  ctx.save();
+  ctx.strokeStyle = '#2a2a2a';
+  ctx.lineWidth = Math.max(1.5, R * 0.028);
+  ctx.lineCap = 'round';
+  [-1, 1].forEach(side => {
+    ctx.beginPath();
+    ctx.arc(side * R * 0.36, -R * 0.3, R * 0.15, Math.PI * 1.18, Math.PI * 1.82);
+    ctx.stroke();
+  });
+  ctx.restore();
+
   // ── Eyes ──
-  const eyeY = -hh * 0.08;
-  const eyeX = hw * 0.3;
-  [[-eyeX, eyeY], [eyeX, eyeY]].forEach(([ex, ey], idx) => {
-    const eyeR = scale * 0.13;
-    const eyeHue = (fc * 2 + idx * 180) % 360;
+  [-1, 1].forEach(side => {
+    const ex = side * R * 0.36, ey = -R * 0.1;
+    const er = R * 0.155;
     ctx.save();
-    // Eye white
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = '#1a1a2a';
     ctx.beginPath();
-    ctx.arc(ex, ey, eyeR, 0, Math.PI * 2);
+    ctx.arc(ex, ey, er, 0, Math.PI * 2);
     ctx.fill();
-    // Iris
-    ctx.fillStyle = `hsl(${eyeHue},100%,55%)`;
-    ctx.shadowColor = `hsl(${eyeHue},100%,70%)`;
-    ctx.shadowBlur = 8;
+    // Large white specular (top-left)
+    ctx.fillStyle = '#ffffff';
     ctx.beginPath();
-    ctx.arc(ex, ey, eyeR * 0.65, 0, Math.PI * 2);
+    ctx.arc(ex - er * 0.3, ey - er * 0.3, er * 0.32, 0, Math.PI * 2);
     ctx.fill();
-    // Pupil
-    ctx.fillStyle = '#1a0030';
-    ctx.shadowBlur = 0;
+    // Small secondary specular
     ctx.beginPath();
-    ctx.arc(ex, ey, eyeR * 0.3, 0, Math.PI * 2);
-    ctx.fill();
-    // Specular
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx.beginPath();
-    ctx.arc(ex - eyeR * 0.2, ey - eyeR * 0.25, eyeR * 0.18, 0, Math.PI * 2);
+    ctx.arc(ex + er * 0.2, ey + er * 0.05, er * 0.14, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   });
 
   // ── Snout ──
   ctx.save();
-  const snoutW = hw * 0.55;
-  const snoutH = hh * 0.22;
-  const snoutY = hh * 0.52;
-  const snoutGrad = ctx.createRadialGradient(0, snoutY, snoutW * 0.1, 0, snoutY, snoutW * 0.7);
-  snoutGrad.addColorStop(0, '#ffc8f0');
-  snoutGrad.addColorStop(1, '#e8a8d8');
-  ctx.fillStyle = snoutGrad;
+  const sw = R * 0.54, sh = R * 0.32, sy = R * 0.5;
+  ctx.fillStyle = '#ffb6c8';
   ctx.beginPath();
-  ctx.ellipse(0, snoutY, snoutW, snoutH, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, sy, sw, sh, 0, 0, Math.PI * 2);
   ctx.fill();
   // Nostrils
-  ctx.fillStyle = 'rgba(180,80,140,0.5)';
+  ctx.fillStyle = 'rgba(210,110,145,0.65)';
+  [-1, 1].forEach(side => {
+    ctx.beginPath();
+    ctx.ellipse(side * sw * 0.32, sy + sh * 0.12, sw * 0.09, sh * 0.22, 0, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  // Smile arc
+  ctx.strokeStyle = '#c06080';
+  ctx.lineWidth = Math.max(1.5, R * 0.025);
+  ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.ellipse(-snoutW * 0.28, snoutY + snoutH * 0.1, snoutW * 0.1, snoutH * 0.25, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.ellipse( snoutW * 0.28, snoutY + snoutH * 0.1, snoutW * 0.1, snoutH * 0.25, 0, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.arc(0, sy + sh * 0.08, sw * 0.3, Math.PI * 0.12, Math.PI * 0.88);
+  ctx.stroke();
+  ctx.restore();
+
+  // ── Blush ──
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,130,165,0.32)';
+  [-1, 1].forEach(side => {
+    ctx.beginPath();
+    ctx.ellipse(side * R * 0.65, R * 0.22, R * 0.19, R * 0.11, 0, 0, Math.PI * 2);
+    ctx.fill();
+  });
   ctx.restore();
 
   ctx.restore(); // end head transform
@@ -839,14 +866,14 @@ function startLoop() {
 
       // Scale from eye distance
       const eyeDist = Math.hypot(leX - reX, leY - reY);
-      const scale = Math.max(30, eyeDist * 3.2);
+      const scale = Math.max(14, eyeDist * 1.12);
 
       // Compute world positions of key unicorn parts
-      const ht = rotatePoint(0, -scale * 0.95, angle, cx, cy);
+      const ht = rotatePoint(0, -scale * 2.0, angle, cx, cy);
       ht._cx = cx; ht._cy = cy; ht._angle = angle; ht._scale = scale;
       hornTip = ht;
-      leftEyeWorld  = rotatePoint(-scale * 0.3, -scale * 0.08, angle, cx, cy);
-      rightEyeWorld = rotatePoint( scale * 0.3, -scale * 0.08, angle, cx, cy);
+      leftEyeWorld  = rotatePoint(-scale * 0.35, -scale * 0.08, angle, cx, cy);
+      rightEyeWorld = rotatePoint( scale * 0.35, -scale * 0.08, angle, cx, cy);
       unicornVisible = true;
 
       drawFaceOverlay(result.faceLandmarks);
