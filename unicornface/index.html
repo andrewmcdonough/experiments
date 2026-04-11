@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Unicorn Face</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0020; overflow: hidden; width: 100vw; height: 100vh; font-family: 'Courier New', monospace; }
+
+  #artCanvas {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  }
+
+  #pip {
+    position: fixed; bottom: 20px; right: 20px;
+    width: 200px; height: 150px;
+    border: 2px solid rgba(180,100,255,0.4);
+    border-radius: 10px;
+    overflow: hidden;
+    background: #111;
+  }
+
+  #webcam {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+    display: block;
+  }
+
+  #faceCanvas {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    transform: scaleX(-1);
+  }
+
+  #statusBar {
+    position: fixed; top: 0; left: 0; right: 0;
+    padding: 10px 20px;
+    display: flex; align-items: center; gap: 12px;
+    background: rgba(0,0,0,0.5);
+    color: #fff;
+    font-size: 13px;
+    z-index: 10;
+  }
+
+  #statusDot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #f44; flex-shrink: 0;
+    transition: background 0.3s;
+  }
+  #statusDot.active { background: #b44fff; }
+
+  #statusText { flex: 1; opacity: 0.8; }
+
+  #gestureDisplay {
+    font-size: 18px;
+    min-width: 160px;
+    text-align: right;
+    transition: opacity 0.3s;
+  }
+
+  #startOverlay {
+    position: fixed; inset: 0;
+    background: rgba(5,0,20,0.92);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    z-index: 20; color: #fff; text-align: center; gap: 20px;
+  }
+
+  #startOverlay h1 {
+    font-size: 2.8rem; letter-spacing: 6px;
+    background: linear-gradient(90deg, #ff6ec7, #b44fff, #6ec6ff, #b4ff6e, #ffec6e, #ff6ec7);
+    background-size: 300% 100%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: rainbowText 3s linear infinite;
+  }
+  @keyframes rainbowText {
+    0% { background-position: 0% 50%; }
+    100% { background-position: 300% 50%; }
+  }
+  #startOverlay p { font-size: 1rem; opacity: 0.6; max-width: 380px; line-height: 1.6; }
+
+  #startBtn {
+    margin-top: 10px;
+    padding: 14px 40px;
+    font-size: 1rem;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 2px;
+    background: transparent;
+    border: 2px solid rgba(180,100,255,0.8);
+    color: #fff;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.2s, color 0.2s;
+  }
+  #startBtn:hover { background: rgba(180,100,255,0.3); }
+
+  #legend {
+    position: fixed; bottom: 20px; left: 20px;
+    color: rgba(200,160,255,0.55);
+    font-size: 11px;
+    line-height: 1.9;
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="artCanvas"></canvas>
+
+<div id="statusBar">
+  <div id="statusDot"></div>
+  <span id="statusText">Click START to begin</span>
+  <span id="gestureDisplay"></span>
+</div>
+
+<div id="pip">
+  <video id="webcam" autoplay playsinline muted></video>
+  <canvas id="faceCanvas"></canvas>
+</div>
+
+<div id="legend">
+  😲 blink both eyes → rainbow beams<br>
+  😄 smile → horn glows with colour<br>
+  🙂 shake head → hearts from horn<br>
+  😔 lower head → storm and darkness
+</div>
+
+<div id="startOverlay">
+  <h1>UNICORN FACE</h1>
+  <p>Your face becomes a magical unicorn. Blink, smile, and shake to cast spells.</p>
+  <button id="startBtn">START</button>
+</div>
+
+<script type="module">
+import { FaceLandmarker, FilesetResolver }
+  from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs';
+
+// ─── file:// guard ────────────────────────────────────────────────────────────
+if (location.protocol === 'file:') {
+  document.getElementById('startOverlay').innerHTML = `
+    <h1>UNICORN FACE</h1>
+    <p style="color:#f88">This page must be served over HTTP — it cannot run from a <code>file://</code> URL.</p>
+    <p>Run a local server:</p>
+    <pre style="background:#111;padding:14px 20px;border-radius:6px;font-size:0.9rem;text-align:left;margin-top:4px">npx serve .<br># then visit http://localhost:3000/unicornface/</pre>`;
+  throw new Error('file:// not supported');
+}
+
+// ─── Canvas & DOM ─────────────────────────────────────────────────────────────
+const artCanvas = document.getElementById('artCanvas');
+const ctx = artCanvas.getContext('2d');
+const faceCanvas = document.getElementById('faceCanvas');
+const faceCtx = faceCanvas.getContext('2d');
+const webcam = document.getElementById('webcam');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const gestureDisplay = document.getElementById('gestureDisplay');
+
+function resize() {
+  artCanvas.width = window.innerWidth;
+  artCanvas.height = window.innerHeight;
+  buildStars();
+}
+window.addEventListener('resize', resize);
+
+// ─── Star field ───────────────────────────────────────────────────────────────
+let stars = [];
+function buildStars() {
+  stars = [];
+  for (let i = 0; i < 120; i++) {
+    stars.push({
+      x: Math.random() * artCanvas.width,
+      y: Math.random() * artCanvas.height,
+      r: 0.5 + Math.random() * 1.5,
+      phase: Math.random() * Math.PI * 2,
+      speed: 0.01 + Math.random() * 0.02
+    });
+  }
+}
+
+// ─── Effect arrays ────────────────────────────────────────────────────────────
+const rainbowBeams = [];
+const hornSparkles = [];
+const hearts = [];
+const rainDrops = [];
+const lightningBolts = [];
+
+// ─── Global state ─────────────────────────────────────────────────────────────
+let smileActive = false;
+let headDownFrames = 0;
+let headUpFrames = 0;
+let sadnessActive = false;
+let sadnessOverlayAlpha = 0;
+let flashAlpha = 0;
+let lightningTimer = 180 + Math.floor(Math.random() * 120);
+let frameCount = 0;
+
+// Unicorn world positions (updated each face frame)
+let hornTip     = { x: 400, y: 300 };
+let leftEyeWorld  = { x: 360, y: 310 };
+let rightEyeWorld = { x: 440, y: 310 };
+let unicornVisible = false;
+
+// ─── Gesture helpers (from faceart) ──────────────────────────────────────────
+const smoothed = {};
+const ALPHA = 0.35;
+const cooldowns = {};
+
+function smooth(key, val) {
+  smoothed[key] = (smoothed[key] === undefined) ? val : smoothed[key] * (1 - ALPHA) + val * ALPHA;
+  return smoothed[key];
+}
+
+function canTrigger(key, ms) {
+  const now = Date.now();
+  if (!cooldowns[key] || now - cooldowns[key] > ms) {
+    cooldowns[key] = now;
+    return true;
+  }
+  return false;
+}
+
+const noseHistory = [];
+const NOSE_HISTORY_MS = 700;
+
+function recordNose(nx, ny) {
+  const now = Date.now();
+  noseHistory.push({ nx, ny, t: now });
+  while (noseHistory.length > 0 && now - noseHistory[0].t > NOSE_HISTORY_MS * 1.5) {
+    noseHistory.shift();
+  }
+}
+
+function detectShake() {
+  if (noseHistory.length < 6) return false;
+  const recent = noseHistory.filter(p => Date.now() - p.t < NOSE_HISTORY_MS);
+  if (recent.length < 4) return false;
+  const xs = recent.map(p => p.nx);
+  return (Math.max(...xs) - Math.min(...xs)) > 0.055;
+}
+
+function getBlendshape(blendshapes, name) {
+  if (!blendshapes || !blendshapes[0]) return 0;
+  const cat = blendshapes[0].categories.find(c => c.categoryName === name);
+  return cat ? cat.score : 0;
+}
+
+// ─── Rotation helper ─────────────────────────────────────────────────────────
+function rotatePoint(lx, ly, angle, cx, cy) {
+  return {
+    x: cx + lx * Math.cos(angle) - ly * Math.sin(angle),
+    y: cy + lx * Math.sin(angle) + ly * Math.cos(angle)
+  };
+}
+
+// ─── RainbowBeam ─────────────────────────────────────────────────────────────
+const BEAM_COLORS = ['#FF0000','#FF7700','#FFFF00','#00CC00','#0088FF','#8800FF','#FF00FF'];
+
+class RainbowBeam {
+  constructor(x, y, dir) { // dir: -1 = left, 1 = right
+    this.x = x; this.y = y;
+    this.dir = dir;
+    this.length = 10;
+    this.alpha = 1;
+    this.age = 0;
+  }
+  update() {
+    this.length += 18;
+    this.age++;
+    if (this.age > 20) this.alpha -= 0.04;
+  }
+  draw(c) {
+    c.save();
+    c.globalAlpha = Math.max(0, this.alpha);
+    const spacing = 7;
+    BEAM_COLORS.forEach((col, i) => {
+      const offsetY = (i - 3) * spacing;
+      c.beginPath();
+      c.moveTo(this.x, this.y + offsetY);
+      c.lineTo(this.x + this.dir * this.length, this.y + offsetY);
+      c.strokeStyle = col;
+      c.lineWidth = 5;
+      c.shadowColor = col;
+      c.shadowBlur = 8;
+      c.stroke();
+    });
+    c.restore();
+  }
+  get dead() { return this.alpha <= 0; }
+}
+
+function spawnRainbowBeams() {
+  rainbowBeams.push(new RainbowBeam(leftEyeWorld.x, leftEyeWorld.y, -1));
+  rainbowBeams.push(new RainbowBeam(rightEyeWorld.x, rightEyeWorld.y, 1));
+}
+
+// ─── HornSparkle (particle) ──────────────────────────────────────────────────
+class HornSparkle {
+  constructor(x, y, hue) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 1.5 + Math.random() * 3.5;
+    this.x = x; this.y = y;
+    this.vx = Math.cos(angle) * speed;
+    this.vy = Math.sin(angle) * speed - 1.5;
+    this.hue = hue;
+    this.alpha = 1;
+    this.radius = 2 + Math.random() * 4;
+    this.decay = 0.022 + Math.random() * 0.015;
+    this.gravity = 0.06;
+  }
+  update() {
+    this.vy += this.gravity;
+    this.x += this.vx;
+    this.y += this.vy;
+    this.alpha -= this.decay;
+    this.radius *= 0.97;
+  }
+  draw(c) {
+    c.save();
+    c.globalAlpha = Math.max(0, this.alpha);
+    c.fillStyle = `hsl(${this.hue},100%,70%)`;
+    c.shadowColor = `hsl(${this.hue},100%,80%)`;
+    c.shadowBlur = 8;
+    c.beginPath();
+    c.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    c.fill();
+    c.restore();
+  }
+  get dead() { return this.alpha <= 0 || this.radius < 0.3; }
+}
+
+// ─── Heart ────────────────────────────────────────────────────────────────────
+class Heart {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.size = 18 + Math.random() * 22;
+    this.alpha = 1;
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 2 + Math.random() * 4;
+    this.vx = Math.cos(angle) * speed;
+    this.vy = Math.sin(angle) * speed - 1;
+    this.hue = 300 + Math.random() * 80; // pinks and purples
+    this.rotation = Math.random() * Math.PI * 2;
+    this.rotSpeed = (Math.random() - 0.5) * 0.08;
+  }
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    this.vy *= 0.98;
+    this.vx *= 0.98;
+    this.rotation += this.rotSpeed;
+    this.alpha -= 0.009;
+    this.size *= 0.998;
+  }
+  draw(c) {
+    const s = this.size;
+    c.save();
+    c.translate(this.x, this.y);
+    c.rotate(this.rotation);
+    c.globalAlpha = Math.max(0, this.alpha);
+    c.fillStyle = `hsl(${this.hue},100%,68%)`;
+    c.shadowColor = `hsl(${this.hue},100%,80%)`;
+    c.shadowBlur = 10;
+    c.beginPath();
+    c.moveTo(0, s * 0.3);
+    c.bezierCurveTo(-s * 0.5, -s * 0.2, -s, s * 0.2, 0, s * 0.8);
+    c.bezierCurveTo(s, s * 0.2, s * 0.5, -s * 0.2, 0, s * 0.3);
+    c.fill();
+    c.restore();
+  }
+  get dead() { return this.alpha <= 0; }
+}
+
+function spawnHeartsFromHorn() {
+  for (let i = 0; i < 9; i++) hearts.push(new Heart(hornTip.x, hornTip.y));
+}
+
+// ─── RainDrop ────────────────────────────────────────────────────────────────
+class RainDrop {
+  constructor() {
+    this.x = Math.random() * artCanvas.width;
+    this.y = -10;
+    this.vy = 8 + Math.random() * 7;
+    this.length = 12 + Math.random() * 18;
+    this.alpha = 0.3 + Math.random() * 0.4;
+  }
+  update() {
+    this.y += this.vy;
+  }
+  draw(c) {
+    c.save();
+    c.globalAlpha = this.alpha;
+    c.strokeStyle = `rgba(100,160,255,0.7)`;
+    c.lineWidth = 1;
+    c.beginPath();
+    c.moveTo(this.x, this.y);
+    c.lineTo(this.x - 1, this.y + this.length);
+    c.stroke();
+    c.restore();
+  }
+  get dead() { return this.y > artCanvas.height + 20; }
+}
+
+// ─── LightningBolt ───────────────────────────────────────────────────────────
+class LightningBolt {
+  constructor() {
+    this.x = 100 + Math.random() * (artCanvas.width - 200);
+    this.segments = this._buildSegments();
+    this.age = 0;
+    this.totalFrames = 10;
+    // trigger global flash
+    flashAlpha = 0.55;
+  }
+  _buildSegments() {
+    const segs = [];
+    const H = artCanvas.height;
+    let cx = this.x, cy = 0;
+    const steps = 14;
+    for (let i = 0; i < steps; i++) {
+      const nx = cx + (Math.random() - 0.5) * 90;
+      const ny = cy + H / steps;
+      segs.push({ x1: cx, y1: cy, x2: nx, y2: ny });
+      cx = nx; cy = ny;
+    }
+    return segs;
+  }
+  update() { this.age++; }
+  draw(c) {
+    const t = this.age / this.totalFrames;
+    const alpha = t < 0.4 ? 1 : 1 - (t - 0.4) / 0.6;
+    c.save();
+    c.globalAlpha = Math.max(0, alpha);
+    c.strokeStyle = '#ffffff';
+    c.shadowColor = '#aaddff';
+    c.shadowBlur = 20;
+    c.lineWidth = 2 + (1 - t) * 3;
+    c.beginPath();
+    this.segments.forEach((s, i) => {
+      if (i === 0) c.moveTo(s.x1, s.y1);
+      c.lineTo(s.x2, s.y2);
+    });
+    c.stroke();
+    // Bright inner line
+    c.strokeStyle = '#eeeeff';
+    c.lineWidth = 1;
+    c.shadowBlur = 5;
+    c.stroke();
+    c.restore();
+  }
+  get dead() { return this.age >= this.totalFrames; }
+}
+
+// ─── Unicorn head drawing ─────────────────────────────────────────────────────
+function drawUnicornHead(cx, cy, angle, scale, smiling, fc) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+
+  const hw = scale;        // half-width reference
+  const hh = scale * 1.2; // half-height reference
+
+  // ── Mane (behind head) ──
+  const maneHues = [0, 45, 100, 180, 240, 290, 340];
+  for (let i = 0; i < 7; i++) {
+    const hue = (fc * 1.2 + i * 52) % 360;
+    const offset = i * 8 - 24;
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = `hsl(${hue},100%,65%)`;
+    ctx.lineWidth = 10;
+    ctx.lineCap = 'round';
+    ctx.shadowColor = `hsl(${hue},100%,75%)`;
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    // Mane curves on the left side of the head
+    ctx.moveTo(-hw * 0.55 + offset * 0.2, -hh * 0.5);
+    ctx.bezierCurveTo(
+      -hw * 1.1 + offset * 0.3, -hh * 0.2,
+      -hw * 1.2 + offset * 0.3,  hh * 0.3,
+      -hw * 0.7 + offset * 0.2,  hh * 0.55
+    );
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ── Head oval ──
+  ctx.save();
+  const headGrad = ctx.createRadialGradient(-hw * 0.1, -hh * 0.1, hw * 0.05, 0, 0, hw * 1.1);
+  headGrad.addColorStop(0, '#fff8fc');
+  headGrad.addColorStop(0.6, '#f0e0ff');
+  headGrad.addColorStop(1, '#d8b8ff');
+  ctx.fillStyle = headGrad;
+  ctx.shadowColor = `rgba(180,100,255,0.35)`;
+  ctx.shadowBlur = 20;
+  ctx.beginPath();
+  ctx.ellipse(0, hh * 0.05, hw * 0.7, hh * 0.78, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // ── Horn ──
+  ctx.save();
+  const hornH = scale * 0.95;
+  const hornBase = scale * 0.14;
+  // Horn gradient - rainbow when smiling
+  let hornGrad;
+  if (smiling) {
+    hornGrad = ctx.createLinearGradient(0, -hh * 0.55, 0, -hh * 0.55 - hornH);
+    const shimHue = (fc * 4) % 360;
+    hornGrad.addColorStop(0,   `hsl(${shimHue},100%,60%)`);
+    hornGrad.addColorStop(0.25, `hsl(${(shimHue+60)%360},100%,65%)`);
+    hornGrad.addColorStop(0.5,  `hsl(${(shimHue+120)%360},100%,65%)`);
+    hornGrad.addColorStop(0.75, `hsl(${(shimHue+200)%360},100%,65%)`);
+    hornGrad.addColorStop(1,    `hsl(${(shimHue+280)%360},100%,70%)`);
+    ctx.shadowColor = `hsl(${shimHue},100%,70%)`;
+    ctx.shadowBlur = 30;
+  } else {
+    hornGrad = ctx.createLinearGradient(0, -hh * 0.55, 0, -hh * 0.55 - hornH);
+    hornGrad.addColorStop(0, '#e8c0ff');
+    hornGrad.addColorStop(1, '#ffffff');
+    ctx.shadowColor = 'rgba(200,140,255,0.4)';
+    ctx.shadowBlur = 10;
+  }
+  ctx.fillStyle = hornGrad;
+  ctx.beginPath();
+  ctx.moveTo(-hornBase, -hh * 0.52);
+  ctx.lineTo(hornBase,  -hh * 0.52);
+  ctx.lineTo(0, -hh * 0.52 - hornH);
+  ctx.closePath();
+  ctx.fill();
+
+  // Horn spiral lines
+  ctx.strokeStyle = smiling ? `hsl(${(fc*3)%360},100%,80%)` : 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 1.5;
+  ctx.shadowBlur = smiling ? 15 : 5;
+  for (let s = 0; s < 5; s++) {
+    const t = s / 5;
+    const sx = -hornBase * (1 - t) + hornBase * (1 - t) * 0.5;
+    const sy = -hh * 0.52 - hornH * t;
+    const ex = -hornBase * (1 - t) * 0.3;
+    const ey = sy;
+    ctx.beginPath();
+    ctx.moveTo(-hornBase * (1 - t) * 0.8, sy);
+    ctx.lineTo(hornBase * (1 - t) * 0.8, sy);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // ── Eyes ──
+  const eyeY = -hh * 0.08;
+  const eyeX = hw * 0.3;
+  [[-eyeX, eyeY], [eyeX, eyeY]].forEach(([ex, ey], idx) => {
+    const eyeR = scale * 0.13;
+    const eyeHue = (fc * 2 + idx * 180) % 360;
+    ctx.save();
+    // Eye white
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(ex, ey, eyeR, 0, Math.PI * 2);
+    ctx.fill();
+    // Iris
+    ctx.fillStyle = `hsl(${eyeHue},100%,55%)`;
+    ctx.shadowColor = `hsl(${eyeHue},100%,70%)`;
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.arc(ex, ey, eyeR * 0.65, 0, Math.PI * 2);
+    ctx.fill();
+    // Pupil
+    ctx.fillStyle = '#1a0030';
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.arc(ex, ey, eyeR * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+    // Specular
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath();
+    ctx.arc(ex - eyeR * 0.2, ey - eyeR * 0.25, eyeR * 0.18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  });
+
+  // ── Snout ──
+  ctx.save();
+  const snoutW = hw * 0.55;
+  const snoutH = hh * 0.22;
+  const snoutY = hh * 0.52;
+  const snoutGrad = ctx.createRadialGradient(0, snoutY, snoutW * 0.1, 0, snoutY, snoutW * 0.7);
+  snoutGrad.addColorStop(0, '#ffc8f0');
+  snoutGrad.addColorStop(1, '#e8a8d8');
+  ctx.fillStyle = snoutGrad;
+  ctx.beginPath();
+  ctx.ellipse(0, snoutY, snoutW, snoutH, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Nostrils
+  ctx.fillStyle = 'rgba(180,80,140,0.5)';
+  ctx.beginPath();
+  ctx.ellipse(-snoutW * 0.28, snoutY + snoutH * 0.1, snoutW * 0.1, snoutH * 0.25, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse( snoutW * 0.28, snoutY + snoutH * 0.1, snoutW * 0.1, snoutH * 0.25, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.restore(); // end head transform
+}
+
+// ─── processGestures ─────────────────────────────────────────────────────────
+function processGestures(result, noseX, noseY, rawNoseY) {
+  const bs = result.faceBlendshapes;
+
+  const blinkL = smooth('blinkL', getBlendshape(bs, 'eyeBlinkLeft'));
+  const blinkR = smooth('blinkR', getBlendshape(bs, 'eyeBlinkRight'));
+  const smileL = smooth('smileL', getBlendshape(bs, 'mouthSmileLeft'));
+  const smileR = smooth('smileR', getBlendshape(bs, 'mouthSmileRight'));
+  const avgSmile = (smileL + smileR) / 2;
+
+  let gestureLabel = '';
+
+  // Blink both eyes → rainbow beams
+  if (blinkL > 0.45 && blinkR > 0.45 && canTrigger('blink', 400)) {
+    spawnRainbowBeams();
+    gestureLabel = '✨ RAINBOW BEAMS!';
+  }
+
+  // Smile → horn glow (stateful)
+  if (avgSmile > 0.4) {
+    if (!smileActive) gestureLabel = '😄 MAGIC HORN!';
+    smileActive = true;
+  } else if (avgSmile < 0.2) {
+    smileActive = false;
+  }
+  // Spawn sparkles continuously while smiling
+  if (smileActive && frameCount % 3 === 0) {
+    const hue = (frameCount * 5) % 360;
+    hornSparkles.push(new HornSparkle(hornTip.x, hornTip.y, hue));
+  }
+
+  // Head shake → hearts from horn
+  if (detectShake() && canTrigger('shake', 900)) {
+    spawnHeartsFromHorn();
+    gestureLabel = '💕 HEART SHOWER!';
+  }
+
+  // Head down → sadness detection
+  if (rawNoseY > 0.58) {
+    headDownFrames++;
+    headUpFrames = 0;
+  } else if (rawNoseY < 0.52) {
+    headUpFrames++;
+    if (headUpFrames > 30) headDownFrames = 0;
+  }
+
+  if (headDownFrames > 50 && !sadnessActive) {
+    sadnessActive = true;
+    gestureLabel = '🌧️ STORM!';
+  }
+  if (headDownFrames === 0 && sadnessActive) {
+    sadnessActive = false;
+  }
+
+  if (gestureLabel) {
+    gestureDisplay.textContent = gestureLabel;
+    clearTimeout(gestureDisplay._timer);
+    gestureDisplay._timer = setTimeout(() => { gestureDisplay.textContent = ''; }, 1800);
+  }
+}
+
+// ─── drawFrame ────────────────────────────────────────────────────────────────
+function drawFrame() {
+  const W = artCanvas.width, H = artCanvas.height;
+  frameCount++;
+
+  // Background gradient
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, '#06001a');
+  bgGrad.addColorStop(1, '#150030');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Stars
+  const t = frameCount;
+  for (const s of stars) {
+    const a = 0.4 + 0.5 * Math.sin(t * s.speed + s.phase);
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // ── Update lists helper ──
+  function updateList(arr) {
+    for (let i = arr.length - 1; i >= 0; i--) {
+      arr[i].update();
+      arr[i].draw(ctx);
+      if (arr[i].dead) arr.splice(i, 1);
+    }
+  }
+
+  // Rain (behind unicorn)
+  if (sadnessActive) {
+    if (frameCount % 2 === 0) rainDrops.push(new RainDrop());
+    // Lightning timer
+    lightningTimer--;
+    if (lightningTimer <= 0) {
+      lightningBolts.push(new LightningBolt());
+      lightningTimer = 180 + Math.floor(Math.random() * 160);
+    }
+  }
+  updateList(rainDrops);
+
+  // Unicorn head
+  if (unicornVisible) {
+    drawUnicornHead(
+      hornTip._cx, hornTip._cy,
+      hornTip._angle, hornTip._scale,
+      smileActive, frameCount
+    );
+  }
+
+  // Effects above unicorn
+  updateList(rainbowBeams);
+  updateList(hornSparkles);
+  updateList(hearts);
+  updateList(lightningBolts);
+
+  // Sadness overlay
+  if (sadnessActive && sadnessOverlayAlpha < 0.65) sadnessOverlayAlpha += 0.008;
+  if (!sadnessActive && sadnessOverlayAlpha > 0) sadnessOverlayAlpha -= 0.006;
+  sadnessOverlayAlpha = Math.max(0, Math.min(0.65, sadnessOverlayAlpha));
+  if (sadnessOverlayAlpha > 0) {
+    ctx.save();
+    ctx.fillStyle = `rgba(0,0,30,${sadnessOverlayAlpha})`;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+
+  // White flash (lightning)
+  if (flashAlpha > 0) {
+    ctx.save();
+    ctx.fillStyle = `rgba(230,240,255,${flashAlpha})`;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+    flashAlpha -= 0.08;
+  }
+}
+
+// ─── Face overlay ─────────────────────────────────────────────────────────────
+function drawFaceOverlay(landmarks) {
+  faceCtx.clearRect(0, 0, faceCanvas.width, faceCanvas.height);
+  if (!landmarks || !landmarks[0]) return;
+  const pts = landmarks[0];
+  const W = faceCanvas.width, H = faceCanvas.height;
+  faceCtx.fillStyle = 'rgba(180,80,255,0.6)';
+  for (let i = 0; i < pts.length; i += 3) {
+    const lm = pts[i];
+    faceCtx.beginPath();
+    faceCtx.arc(lm.x * W, lm.y * H, 0.8, 0, Math.PI * 2);
+    faceCtx.fill();
+  }
+}
+
+// ─── MediaPipe setup ──────────────────────────────────────────────────────────
+let faceLandmarker = null;
+let lastVideoTime = -1;
+
+async function initMediaPipe() {
+  statusText.textContent = 'Loading AI model…';
+  const vision = await FilesetResolver.forVisionTasks(
+    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
+  );
+  faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+      delegate: 'GPU'
+    },
+    outputFaceBlendshapes: true,
+    runningMode: 'VIDEO',
+    numFaces: 1
+  });
+  statusText.textContent = 'Requesting camera…';
+  await initCamera();
+}
+
+async function initCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+      audio: false
+    });
+    webcam.srcObject = stream;
+    await new Promise(res => { webcam.onloadedmetadata = res; });
+    webcam.play();
+
+    faceCanvas.width = 200;
+    faceCanvas.height = 150;
+
+    statusDot.classList.add('active');
+    statusText.textContent = 'Face tracking active — make some magic!';
+    startLoop();
+  } catch (e) {
+    statusText.textContent = 'Camera access denied — please allow camera and reload.';
+    console.error(e);
+  }
+}
+
+function startLoop() {
+  function loop() {
+    requestAnimationFrame(loop);
+    drawFrame();
+
+    if (!faceLandmarker || !webcam.videoWidth) return;
+    if (webcam.currentTime === lastVideoTime) return;
+    lastVideoTime = webcam.currentTime;
+
+    const result = faceLandmarker.detectForVideo(webcam, performance.now());
+
+    if (result.faceLandmarks && result.faceLandmarks[0]) {
+      const lms = result.faceLandmarks[0];
+      const W = artCanvas.width, H = artCanvas.height;
+
+      // Nose tip (index 1) — flip x for mirror
+      const nose = lms[1];
+      recordNose(nose.x, nose.y);
+      const cx = (1 - nose.x) * W;
+      const cy = nose.y * H;
+
+      // Left eye outer (33) and right eye outer (263) — flip x
+      const le = lms[33];
+      const re = lms[263];
+      const leX = (1 - le.x) * W, leY = le.y * H;
+      const reX = (1 - re.x) * W, reY = re.y * H;
+
+      // Head roll angle (note: after x-flip, left/right swapped)
+      const angle = Math.atan2(leY - reY, leX - reX);
+
+      // Scale from eye distance
+      const eyeDist = Math.hypot(leX - reX, leY - reY);
+      const scale = Math.max(30, eyeDist * 3.2);
+
+      // Compute world positions of key unicorn parts
+      const ht = rotatePoint(0, -scale * 0.95, angle, cx, cy);
+      ht._cx = cx; ht._cy = cy; ht._angle = angle; ht._scale = scale;
+      hornTip = ht;
+      leftEyeWorld  = rotatePoint(-scale * 0.3, -scale * 0.08, angle, cx, cy);
+      rightEyeWorld = rotatePoint( scale * 0.3, -scale * 0.08, angle, cx, cy);
+      unicornVisible = true;
+
+      drawFaceOverlay(result.faceLandmarks);
+      processGestures(result, cx, cy, nose.y);
+    } else {
+      unicornVisible = false;
+      faceCtx.clearRect(0, 0, faceCanvas.width, faceCanvas.height);
+    }
+  }
+  loop();
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+resize(); // sets up canvas + star field
+
+document.getElementById('startBtn').addEventListener('click', async () => {
+  document.getElementById('startOverlay').style.display = 'none';
+  await initMediaPipe();
+});
+</script>
+</body>
+</html>
