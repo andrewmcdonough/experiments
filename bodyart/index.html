@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Body Art</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #000; overflow: hidden; font-family: 'Courier New', monospace; }
+    canvas#c { display: block; position: fixed; top: 0; left: 0; }
+
+    #statusBar {
+      position: fixed; top: 0; left: 0; right: 0;
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 16px; background: rgba(0,0,0,0.5);
+      z-index: 10; font-size: 13px; color: #888; letter-spacing: 0.05em;
+    }
+    #statusDot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #444; flex-shrink: 0; transition: background 0.3s;
+    }
+    #statusDot.active { background: #39FF14; }
+    #statusDot.error  { background: #FF3366; }
+
+    #pip {
+      position: fixed; bottom: 16px; right: 16px;
+      width: 240px; height: 180px;
+      border-radius: 8px; overflow: hidden; z-index: 10;
+      background: #000; border: 1px solid rgba(255,255,255,0.1);
+    }
+    #webcam {
+      width: 100%; height: 100%; object-fit: cover;
+      transform: scaleX(-1); display: block;
+    }
+    #bodyCanvas {
+      position: absolute; top: 0; left: 0;
+      width: 100%; height: 100%; transform: scaleX(-1);
+    }
+
+    #hint {
+      position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+      color: #444; font-size: 12px; letter-spacing: 0.08em;
+      pointer-events: none; user-select: none; z-index: 10;
+    }
+
+    #startOverlay {
+      position: fixed; inset: 0; background: #111;
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 14px; z-index: 100;
+    }
+    #startOverlay h1 {
+      font-size: 42px; letter-spacing: 0.15em;
+      color: #fff; font-weight: normal;
+    }
+    #startOverlay .subtitle {
+      font-size: 14px; color: #666; letter-spacing: 0.06em;
+    }
+    .gestures {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 8px 32px; list-style: none; margin: 6px 0;
+    }
+    .gestures li { font-size: 13px; color: #555; letter-spacing: 0.04em; }
+    .gestures li em { color: #aaa; font-style: normal; }
+    #startBtn {
+      margin-top: 8px; padding: 12px 36px; background: none;
+      border: 1px solid #555; color: #ccc;
+      font-family: 'Courier New', monospace; font-size: 14px;
+      letter-spacing: 0.12em; cursor: pointer; border-radius: 3px;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    #startBtn:hover { border-color: #39FF14; color: #39FF14; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+
+  <div id="statusBar">
+    <div id="statusDot"></div>
+    <span id="statusText">Ready</span>
+  </div>
+
+  <div id="pip">
+    <video id="webcam" autoplay playsinline muted></video>
+    <canvas id="bodyCanvas"></canvas>
+  </div>
+
+  <div id="hint">move your body to create art &nbsp;·&nbsp; esc to clear</div>
+
+  <div id="startOverlay">
+    <h1>BODY ART</h1>
+    <p class="subtitle">Your body is the brush. Move to paint.</p>
+    <ul class="gestures">
+      <li><em>✦ Raise an arm</em> — bubbles float up</li>
+      <li><em>✦ Kick out</em> — electric sparks</li>
+      <li><em>✦ T-pose</em> — rainbow arc</li>
+      <li><em>✦ Both arms above head</em> — fireworks</li>
+      <li><em>✦ Squat / crouch</em> — shockwave rings</li>
+      <li><em>✦ Lean sideways</em> — colour smear</li>
+    </ul>
+    <button id="startBtn">START</button>
+  </div>
+
+  <script type="module">
+    import { PoseLandmarker, FilesetResolver }
+      from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs';
+
+    // ── DOM refs ───────────────────────────────────────────────────────────────
+    const canvas     = document.getElementById('c');
+    const ctx        = canvas.getContext('2d');
+    const webcam     = document.getElementById('webcam');
+    const bodyCanvas = document.getElementById('bodyCanvas');
+    const bodyCtx    = bodyCanvas.getContext('2d');
+    const statusDot  = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+
+    // ── Art canvas (persistent, slowly-fading layer for arcs & smears) ─────────
+    const artCanvas = document.createElement('canvas');
+    const artCtx    = artCanvas.getContext('2d');
+
+    // ── Sizing ─────────────────────────────────────────────────────────────────
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      artCanvas.width = canvas.width;
+      artCanvas.height = canvas.height;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // ── Particles (ephemeral effects) ──────────────────────────────────────────
+    const particles = [];
+
+    function spawnBubbles(x, y) {
+      const hue = Math.random() * 360;
+      for (let i = 0; i < 4; i++) {
+        particles.push({
+          type: 'bubble', x, y,
+          vx: (Math.random() - 0.5) * 3,
+          vy: -(Math.random() * 4 + 1.5),
+          r: Math.random() * 18 + 8,
+          hue: (hue + Math.random() * 80) % 360,
+          life: 1, decay: 0.006 + Math.random() * 0.008,
+        });
+      }
+    }
+
+    function spawnSparks(x, y, angle) {
+      for (let i = 0; i < 15; i++) {
+        const a = angle + (Math.random() - 0.5) * 1.4;
+        const s = Math.random() * 10 + 4;
+        particles.push({
+          type: 'spark', x, y,
+          vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+          hue: Math.random() * 60 + 180, // cyan–blue range
+          life: 1, decay: 0.04 + Math.random() * 0.04,
+        });
+      }
+    }
+
+    function spawnFireworks(x, y) {
+      const hue = Math.random() * 360;
+      for (let i = 0; i < 30; i++) {
+        const angle = (i / 30) * Math.PI * 2 + Math.random() * 0.2;
+        const speed = Math.random() * 7 + 2;
+        particles.push({
+          type: 'firework', x, y,
+          vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+          r: Math.random() * 5 + 2,
+          hue: (hue + Math.random() * 120) % 360,
+          trail: [],
+          life: 1, decay: 0.012 + Math.random() * 0.012,
+        });
+      }
+    }
+
+    function spawnRings(x, y) {
+      for (let i = 0; i < 3; i++) {
+        particles.push({
+          type: 'ring', x, y,
+          r: 10 + i * 30,
+          maxR: 220 + i * 50,
+          hue: Math.random() * 360,
+          life: 1, decay: 0.018 - i * 0.003,
+        });
+      }
+    }
+
+    // ── Art-canvas draws (arc & smear go here — persist & fade) ───────────────
+    function drawArc(x1, y1, x2, y2) {
+      const mx = (x1 + x2) / 2;
+      const my = Math.min(y1, y2) - Math.abs(x2 - x1) * 0.45;
+      const hue = Math.random() * 360;
+      for (let i = 5; i >= 0; i--) {
+        artCtx.beginPath();
+        artCtx.moveTo(x1, y1);
+        artCtx.quadraticCurveTo(mx, my - i * 8, x2, y2);
+        artCtx.strokeStyle = `hsl(${(hue + i * 40) % 360},100%,65%)`;
+        artCtx.lineWidth   = 3 + i * 0.8;
+        artCtx.shadowColor = `hsl(${hue},100%,65%)`;
+        artCtx.shadowBlur  = 20;
+        artCtx.stroke();
+      }
+      artCtx.shadowBlur = 0;
+    }
+
+    function drawSmear(x, y, width, dirX) {
+      const hue = Math.random() * 360;
+      const x0  = x - width * 0.5;
+      const x1  = x + width * 0.5;
+      const grad = artCtx.createLinearGradient(
+        dirX > 0 ? x0 : x1, y,
+        dirX > 0 ? x1 : x0, y
+      );
+      grad.addColorStop(0,    `hsla(${hue},100%,60%,0)`);
+      grad.addColorStop(0.25, `hsla(${hue},100%,60%,0.9)`);
+      grad.addColorStop(0.75, `hsla(${hue},100%,60%,0.9)`);
+      grad.addColorStop(1,    `hsla(${hue},100%,60%,0)`);
+      artCtx.fillStyle  = grad;
+      artCtx.shadowColor = `hsl(${hue},100%,60%)`;
+      artCtx.shadowBlur  = 14;
+      artCtx.fillRect(x0, y - 10, width, 20);
+      artCtx.shadowBlur  = 0;
+    }
+
+    // ── Update & draw particles ────────────────────────────────────────────────
+    function updateParticles() {
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.life -= p.decay;
+        if (p.life <= 0) { particles.splice(i, 1); continue; }
+
+        if (p.type === 'bubble') {
+          p.x += p.vx; p.y += p.vy;
+          p.vy -= 0.06; // float upward
+        } else if (p.type === 'spark') {
+          p.x += p.vx; p.y += p.vy;
+          p.vx *= 0.91; p.vy *= 0.91;
+          p.vy += 0.15; // slight gravity
+        } else if (p.type === 'firework') {
+          p.trail.push({ x: p.x, y: p.y });
+          if (p.trail.length > 6) p.trail.shift();
+          p.x += p.vx; p.y += p.vy;
+          p.vx *= 0.97; p.vy *= 0.97;
+          p.vy += 0.08; // gravity
+        } else if (p.type === 'ring') {
+          p.r += (p.maxR - p.r) * 0.07;
+        }
+      }
+    }
+
+    function drawParticles() {
+      for (const p of particles) {
+        ctx.globalAlpha = p.life;
+
+        if (p.type === 'bubble') {
+          ctx.shadowColor = `hsl(${p.hue},100%,60%)`;
+          ctx.shadowBlur  = 18;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+          ctx.fillStyle   = `hsla(${p.hue},100%,65%,0.5)`;
+          ctx.fill();
+          ctx.strokeStyle = `hsl(${p.hue},100%,80%)`;
+          ctx.lineWidth   = 1.5;
+          ctx.stroke();
+
+        } else if (p.type === 'spark') {
+          ctx.shadowColor = `hsl(${p.hue},100%,70%)`;
+          ctx.shadowBlur  = 10;
+          ctx.strokeStyle = `hsl(${p.hue},100%,70%)`;
+          ctx.lineWidth   = 2;
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(p.x - p.vx * 4, p.y - p.vy * 4);
+          ctx.stroke();
+
+        } else if (p.type === 'firework') {
+          if (p.trail.length > 1) {
+            ctx.strokeStyle = `hsla(${p.hue},100%,70%,${p.life * 0.4})`;
+            ctx.lineWidth   = 1;
+            ctx.beginPath();
+            ctx.moveTo(p.trail[0].x, p.trail[0].y);
+            for (const pt of p.trail) ctx.lineTo(pt.x, pt.y);
+            ctx.stroke();
+          }
+          ctx.shadowColor = `hsl(${p.hue},100%,70%)`;
+          ctx.shadowBlur  = 14;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.r * p.life + 1, 0, Math.PI * 2);
+          ctx.fillStyle   = `hsl(${p.hue},100%,70%)`;
+          ctx.fill();
+
+        } else if (p.type === 'ring') {
+          ctx.shadowColor = `hsl(${p.hue},100%,60%)`;
+          ctx.shadowBlur  = 25;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+          ctx.strokeStyle = `hsl(${p.hue},100%,60%)`;
+          ctx.lineWidth   = 4 * p.life;
+          ctx.stroke();
+        }
+
+        ctx.shadowBlur  = 0;
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // ── Cooldowns ──────────────────────────────────────────────────────────────
+    const cooldowns = new Map();
+
+    function canTrigger(key, ms) {
+      const now = performance.now();
+      if (cooldowns.has(key) && now - cooldowns.get(key) < ms) return false;
+      cooldowns.set(key, now);
+      return true;
+    }
+
+    // ── Coordinate helpers ─────────────────────────────────────────────────────
+    // Pose landmarks are in [0,1] relative to video frame.
+    // Main canvas mirrors X: canvasX = (1 - lm.x) * width
+    function toC(lm) {
+      return { x: (1 - lm.x) * canvas.width, y: lm.y * canvas.height };
+    }
+
+    // ── Gesture processing per person ──────────────────────────────────────────
+    function processGestures(lms, idx) {
+      const id = `${idx}`;
+
+      const nose = lms[0];
+      const lSh  = lms[11], rSh  = lms[12]; // shoulders
+      const lWr  = lms[15], rWr  = lms[16]; // wrists
+      const lHip = lms[23], rHip = lms[24];
+      const lAnk = lms[27], rAnk = lms[28];
+
+      const shW   = Math.abs(lSh.x - rSh.x); // shoulder width in normalised units
+      const shMid = { x: (lSh.x + rSh.x) / 2, y: (lSh.y + rSh.y) / 2 };
+
+      const cLWr  = toC(lWr),  cRWr  = toC(rWr);
+      const cLAnk = toC(lAnk), cRAnk = toC(rAnk);
+
+      // ── Both arms above head → fireworks (takes priority) ─────────────────
+      if (lWr.y < nose.y - 0.05 && rWr.y < nose.y - 0.05) {
+        if (canTrigger(`${id}_fw`, 450)) {
+          spawnFireworks(cLWr.x, cLWr.y);
+          spawnFireworks(cRWr.x, cRWr.y);
+        }
+        return; // skip other checks this frame
+      }
+
+      // ── One arm raised → bubbles ───────────────────────────────────────────
+      if (lWr.y < lSh.y - 0.04 && canTrigger(`${id}_lb`, 200)) spawnBubbles(cLWr.x, cLWr.y);
+      if (rWr.y < rSh.y - 0.04 && canTrigger(`${id}_rb`, 200)) spawnBubbles(cRWr.x, cRWr.y);
+
+      // ── T-pose (arms spread wide at shoulder height) → rainbow arc ─────────
+      const wSpread = Math.abs(lWr.x - rWr.x);
+      const lAtSh   = Math.abs(lWr.y - lSh.y) < 0.14;
+      const rAtSh   = Math.abs(rWr.y - rSh.y) < 0.14;
+      if (wSpread > shW * 2.3 && lAtSh && rAtSh && canTrigger(`${id}_arc`, 500)) {
+        drawArc(cLWr.x, cLWr.y, cRWr.x, cRWr.y);
+      }
+
+      // ── Kick out (ankle far from hip laterally) → electric sparks ──────────
+      if (Math.abs(lAnk.x - lHip.x) > shW * 0.8 && canTrigger(`${id}_lk`, 280)) {
+        const ang = Math.atan2(lAnk.y - lHip.y, -(lAnk.x - lHip.x));
+        spawnSparks(cLAnk.x, cLAnk.y, ang);
+      }
+      if (Math.abs(rAnk.x - rHip.x) > shW * 0.8 && canTrigger(`${id}_rk`, 280)) {
+        const ang = Math.atan2(rAnk.y - rHip.y, -(rAnk.x - rHip.x));
+        spawnSparks(cRAnk.x, cRAnk.y, ang);
+      }
+
+      // ── Squat / crouch (hips drop below standing position) → rings ─────────
+      const hipY  = (lHip.y + rHip.y) / 2;
+      const shouY = (lSh.y + rSh.y) / 2;
+      if (hipY > shouY + 0.35 && canTrigger(`${id}_sq`, 700)) {
+        spawnRings(
+          (cLAnk.x + cRAnk.x) / 2,
+          (cLAnk.y + cRAnk.y) / 2
+        );
+      }
+
+      // ── Lean sideways (shoulder tilt) → colour smear ───────────────────────
+      // tilt > 0 means anatomical left shoulder lower = lean toward screen-left
+      const tilt = lSh.y - rSh.y;
+      if (Math.abs(tilt) > 0.15 && canTrigger(`${id}_ln`, 700)) {
+        const cx = (1 - shMid.x) * canvas.width;
+        const cy = shMid.y * canvas.height;
+        drawSmear(cx, cy, shW * canvas.width * 2.5, -tilt);
+      }
+    }
+
+    // ── Skeleton overlay drawn in PiP ──────────────────────────────────────────
+    const BONE_PAIRS = [
+      [11,12], [11,13], [13,15], [12,14], [14,16], // arms
+      [11,23], [12,24], [23,24],                   // torso
+      [23,25], [25,27], [24,26], [26,28],           // legs
+    ];
+    const PERSON_COLORS = ['#39FF14', '#FF2D55', '#3D7EFF', '#FFE600'];
+
+    function drawSkeleton(allLandmarks) {
+      bodyCtx.clearRect(0, 0, bodyCanvas.width, bodyCanvas.height);
+      const W = bodyCanvas.width, H = bodyCanvas.height;
+
+      allLandmarks.forEach((lms, pi) => {
+        const col = PERSON_COLORS[pi % PERSON_COLORS.length];
+
+        bodyCtx.strokeStyle = col;
+        bodyCtx.lineWidth   = 2;
+        bodyCtx.globalAlpha = 0.85;
+
+        for (const [a, b] of BONE_PAIRS) {
+          if (!lms[a] || !lms[b]) continue;
+          if ((lms[a].visibility ?? 1) < 0.3 || (lms[b].visibility ?? 1) < 0.3) continue;
+          bodyCtx.beginPath();
+          bodyCtx.moveTo(lms[a].x * W, lms[a].y * H);
+          bodyCtx.lineTo(lms[b].x * W, lms[b].y * H);
+          bodyCtx.stroke();
+        }
+
+        bodyCtx.fillStyle   = col;
+        bodyCtx.globalAlpha = 1;
+        for (const lm of lms) {
+          if ((lm.visibility ?? 1) < 0.3) continue;
+          bodyCtx.beginPath();
+          bodyCtx.arc(lm.x * W, lm.y * H, 3, 0, Math.PI * 2);
+          bodyCtx.fill();
+        }
+      });
+    }
+
+    // ── Main render loop ───────────────────────────────────────────────────────
+    function renderLoop() {
+      requestAnimationFrame(renderLoop);
+
+      // Camera feed (mirrored)
+      if (webcam.readyState >= 2) {
+        ctx.save();
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(webcam, 0, 0, canvas.width, canvas.height);
+        ctx.restore();
+      } else {
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+
+      // Slight darkening overlay for contrast
+      ctx.fillStyle = 'rgba(0,0,0,0.12)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Fade art canvas (0.5% per frame ≈ fades to ~37% after ~3 s at 60 fps)
+      artCtx.globalCompositeOperation = 'destination-out';
+      artCtx.fillStyle = 'rgba(0,0,0,0.005)';
+      artCtx.fillRect(0, 0, artCanvas.width, artCanvas.height);
+      artCtx.globalCompositeOperation = 'source-over';
+
+      // Composite persistent art on top of camera
+      ctx.drawImage(artCanvas, 0, 0);
+
+      // Ephemeral particles
+      updateParticles();
+      drawParticles();
+    }
+    requestAnimationFrame(renderLoop);
+
+    // ── Clear on Escape ────────────────────────────────────────────────────────
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        particles.length = 0;
+        artCtx.clearRect(0, 0, artCanvas.width, artCanvas.height);
+      }
+    });
+
+    // ── MediaPipe setup ────────────────────────────────────────────────────────
+    let poseLandmarker = null;
+    let lastVideoTime  = -1;
+
+    async function initMediaPipe() {
+      statusText.textContent = 'Loading AI model…';
+      const vision = await FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
+      );
+      poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+          delegate: 'GPU',
+        },
+        runningMode: 'VIDEO',
+        numPoses: 4,
+      });
+      await initCamera();
+    }
+
+    async function initCamera() {
+      statusText.textContent = 'Requesting camera…';
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+          audio: false,
+        });
+        webcam.srcObject = stream;
+        await new Promise(res => { webcam.onloadedmetadata = res; });
+        webcam.play();
+
+        bodyCanvas.width  = 240;
+        bodyCanvas.height = 180;
+
+        statusDot.classList.add('active');
+        statusText.textContent = 'Move your body to create art';
+        startPoseLoop();
+      } catch (e) {
+        statusDot.classList.add('error');
+        statusText.textContent = 'Camera access denied — please allow camera and reload.';
+      }
+    }
+
+    function startPoseLoop() {
+      function poseLoop() {
+        requestAnimationFrame(poseLoop);
+        if (!poseLandmarker || !webcam.videoWidth) return;
+        if (webcam.currentTime === lastVideoTime) return;
+        lastVideoTime = webcam.currentTime;
+
+        const result = poseLandmarker.detectForVideo(webcam, performance.now());
+
+        if (result.landmarks?.length) {
+          result.landmarks.forEach((lms, i) => processGestures(lms, i));
+          drawSkeleton(result.landmarks);
+        } else {
+          bodyCtx.clearRect(0, 0, bodyCanvas.width, bodyCanvas.height);
+        }
+      }
+      poseLoop();
+    }
+
+    // ── Start button ───────────────────────────────────────────────────────────
+    document.getElementById('startBtn').addEventListener('click', async () => {
+      document.getElementById('startOverlay').style.display = 'none';
+      await initMediaPipe();
+    });
+  </script>
+</body>
+</html>
