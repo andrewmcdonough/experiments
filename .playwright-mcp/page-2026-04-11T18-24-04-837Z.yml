@@ -1,0 +1,11 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e5]: Click START to begin
+  - generic [ref=e9]:
+    - text: 😲 blink both eyes → rainbow beams
+    - text: 😄 smile → horn glows with colour
+    - text: 🙂 shake head → hearts from horn
+    - text: 😔 lower head → storm and darkness
+  - generic [ref=e10]:
+    - heading "UNICORN FACE" [level=1] [ref=e11]
+    - paragraph [ref=e12]: Your face becomes a magical unicorn. Blink, smile, and shake to cast spells.
+    - button "START" [ref=e13] [cursor=pointer]
