@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bubble Face</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #111;
+      overflow: hidden;
+      font-family: 'Courier New', monospace;
+    }
+
+    canvas#c {
+      display: block;
+      position: fixed;
+      top: 0; left: 0;
+    }
+
+    /* Status bar */
+    #statusBar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      background: rgba(0,0,0,0.5);
+      z-index: 10;
+      font-size: 13px;
+      color: #888;
+      letter-spacing: 0.05em;
+    }
+    #statusDot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #444;
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    #statusDot.active { background: #39FF14; }
+    #statusDot.error  { background: #FF3366; }
+
+    /* PiP webcam preview */
+    #pip {
+      position: fixed;
+      bottom: 16px; right: 16px;
+      width: 200px; height: 150px;
+      border-radius: 8px;
+      overflow: hidden;
+      z-index: 10;
+      background: #000;
+      opacity: 0.6;
+    }
+    #webcam {
+      width: 100%; height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+      display: block;
+    }
+    #faceCanvas {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      transform: scaleX(-1);
+    }
+
+    /* Hint */
+    #hint {
+      position: fixed;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #444;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      pointer-events: none;
+      user-select: none;
+      z-index: 10;
+    }
+
+    /* Start overlay */
+    #startOverlay {
+      position: fixed;
+      inset: 0;
+      background: #111;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      z-index: 100;
+    }
+    #startOverlay h1 {
+      font-size: 42px;
+      letter-spacing: 0.15em;
+      color: #fff;
+      font-weight: normal;
+    }
+    #startOverlay p {
+      font-size: 14px;
+      color: #888;
+      max-width: 380px;
+      text-align: center;
+      line-height: 1.6;
+      letter-spacing: 0.04em;
+    }
+    #startBtn {
+      margin-top: 12px;
+      padding: 12px 36px;
+      background: none;
+      border: 1px solid #555;
+      color: #ccc;
+      font-family: 'Courier New', monospace;
+      font-size: 14px;
+      letter-spacing: 0.12em;
+      cursor: pointer;
+      border-radius: 3px;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    #startBtn:hover {
+      border-color: #39FF14;
+      color: #39FF14;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+
+  <div id="statusBar">
+    <div id="statusDot"></div>
+    <span id="statusText">Ready</span>
+  </div>
+
+  <div id="pip">
+    <video id="webcam" autoplay playsinline muted></video>
+    <canvas id="faceCanvas"></canvas>
+  </div>
+
+  <div id="hint">move your face to paint &nbsp;·&nbsp; esc to clear</div>
+
+  <div id="startOverlay">
+    <h1>BUBBLE FACE</h1>
+    <p>Your face is the brush. Move your nose around the screen to paint with rainbow dots.</p>
+    <button id="startBtn">START</button>
+  </div>
+
+  <script type="module">
+    import { FaceLandmarker, FilesetResolver }
+      from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs';
+
+    // ── Elements ──────────────────────────────────────────────────────────────
+    const canvas     = document.getElementById('c');
+    const ctx        = canvas.getContext('2d');
+    const webcam     = document.getElementById('webcam');
+    const faceCanvas = document.getElementById('faceCanvas');
+    const faceCtx    = faceCanvas.getContext('2d');
+    const statusDot  = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+
+    // ── Colours ───────────────────────────────────────────────────────────────
+    const COLORS = [
+      null,
+      '#FF2D55',  // vivid rose-red
+      '#FF7A00',  // vivid orange
+      '#FFE600',  // vivid yellow
+      '#39FF14',  // neon green
+      '#00F5D4',  // electric cyan-teal
+      '#3D7EFF',  // vivid blue
+      '#BF00FF',  // vivid violet
+    ];
+
+    // ── Grid constants ────────────────────────────────────────────────────────
+    const SPACING   = 65;
+    const ACTIVE_R  = 18;
+    const INACTIVE_R = 10;
+    const RING_R    = 28;
+    const HIT_R     = RING_R;
+
+    // ── Grid state ────────────────────────────────────────────────────────────
+    let dots = [];
+    let cols = 0, rows = 0;
+    let activeDotIds = new Set(); // dots currently inside the face region
+
+    function buildGrid() {
+      const W = canvas.width;
+      const H = canvas.height;
+      const newCols = Math.floor(W / SPACING);
+      const newRows = Math.floor(H / SPACING);
+      const offsetX = (W - (newCols - 1) * SPACING) / 2;
+      const offsetY = (H - (newRows - 1) * SPACING) / 2;
+
+      const oldDots = dots;
+      const newDots = [];
+      for (let r = 0; r < newRows; r++) {
+        for (let c = 0; c < newCols; c++) {
+          const oldIndex = r * cols + c;
+          const colorIndex = (c < cols && r < rows && oldDots[oldIndex])
+            ? oldDots[oldIndex].colorIndex : 0;
+          newDots.push({
+            id: r * newCols + c,
+            x: offsetX + c * SPACING,
+            y: offsetY + r * SPACING,
+            colorIndex,
+          });
+        }
+      }
+      dots = newDots;
+      cols = newCols;
+      rows = newRows;
+    }
+
+    function resize() {
+      canvas.width  = window.innerWidth;
+      canvas.height = window.innerHeight;
+      buildGrid();
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // ── Face-region brush ─────────────────────────────────────────────────────
+    // Applies an elliptical face region to the dot grid.
+    // Dots newly entering the ellipse get their colour cycled.
+    // Dots that leave and re-enter will cycle again.
+    function applyFaceRegion(cx, cy, rx, ry) {
+      const newActive = new Set();
+
+      for (const dot of dots) {
+        const dx = (dot.x - cx) / rx;
+        const dy = (dot.y - cy) / ry;
+        if (dx * dx + dy * dy <= 1) {
+          newActive.add(dot.id);
+          if (!activeDotIds.has(dot.id)) {
+            // Dot just entered the face region — cycle its colour
+            dot.colorIndex = (dot.colorIndex + 1) % COLORS.length;
+          }
+        }
+      }
+
+      activeDotIds = newActive;
+    }
+
+    function clearActiveDots() {
+      activeDotIds = new Set();
+    }
+
+    // ── Escape to clear ───────────────────────────────────────────────────────
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        for (const dot of dots) dot.colorIndex = 0;
+      }
+    });
+
+    // ── Draw loop ─────────────────────────────────────────────────────────────
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      for (const dot of dots) {
+        const color = COLORS[dot.colorIndex];
+
+        if (!color) {
+          // Inactive: two concentric dark circles
+          ctx.beginPath();
+          ctx.arc(dot.x, dot.y, RING_R, 0, Math.PI * 2);
+          ctx.fillStyle = '#1e1e1e';
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(dot.x, dot.y, INACTIVE_R, 0, Math.PI * 2);
+          ctx.fillStyle = '#2e2e2e';
+          ctx.fill();
+        } else {
+          // Active: glow + vivid fill
+          ctx.shadowColor = color;
+          ctx.shadowBlur  = 22;
+
+          ctx.beginPath();
+          ctx.arc(dot.x, dot.y, ACTIVE_R, 0, Math.PI * 2);
+          ctx.fillStyle = color;
+          ctx.fill();
+
+          ctx.shadowBlur = 0;
+        }
+      }
+
+      requestAnimationFrame(draw);
+    }
+    draw();
+
+    // ── MediaPipe setup ───────────────────────────────────────────────────────
+    let faceLandmarker = null;
+    let lastVideoTime  = -1;
+    let facePresent    = false;
+
+    async function initMediaPipe() {
+      statusText.textContent = 'Loading AI model…';
+
+      const vision = await FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
+      );
+
+      faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+          delegate: 'GPU',
+        },
+        runningMode: 'VIDEO',
+        numFaces: 1,
+      });
+
+      await initCamera();
+    }
+
+    async function initCamera() {
+      statusText.textContent = 'Requesting camera…';
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+          audio: false,
+        });
+        webcam.srcObject = stream;
+        await new Promise(res => { webcam.onloadedmetadata = res; });
+        webcam.play();
+
+        faceCanvas.width  = 200;
+        faceCanvas.height = 150;
+
+        statusDot.classList.add('active');
+        statusText.textContent = 'Move your face to paint';
+        startFaceLoop();
+      } catch (e) {
+        statusDot.classList.add('error');
+        statusText.textContent = 'Camera access denied — please allow camera and reload.';
+      }
+    }
+
+    function startFaceLoop() {
+      function loop() {
+        requestAnimationFrame(loop);
+
+        if (!faceLandmarker || !webcam.videoWidth) return;
+        if (webcam.currentTime === lastVideoTime) return;
+        lastVideoTime = webcam.currentTime;
+
+        const result = faceLandmarker.detectForVideo(webcam, performance.now());
+
+        if (result.faceLandmarks && result.faceLandmarks[0]) {
+          const lms = result.faceLandmarks[0];
+          const W = canvas.width, H = canvas.height;
+
+          // Face ellipse from boundary landmarks (x flipped for mirror)
+          // 234 = left cheek, 454 = right cheek, 10 = forehead, 152 = chin
+          const leftCheek  = lms[234];
+          const rightCheek = lms[454];
+          const forehead   = lms[10];
+          const chin       = lms[152];
+
+          // Horizontal: flip x for mirror, width from cheek-to-cheek
+          const cx = (1 - (leftCheek.x + rightCheek.x) / 2) * W;
+          const rx = ((rightCheek.x - leftCheek.x) / 2) * W;
+
+          // Vertical: y is not flipped
+          const cy = ((forehead.y + chin.y) / 2) * H;
+          const ry = ((chin.y - forehead.y) / 2) * H;
+
+          facePresent = true;
+          applyFaceRegion(cx, cy, rx, ry);
+          drawFaceOverlay(result.faceLandmarks, cx, cy, rx, ry);
+        } else {
+          if (facePresent) {
+            // Face left frame — clear active set so re-entry cycles dots
+            clearActiveDots();
+            facePresent = false;
+          }
+          faceCtx.clearRect(0, 0, faceCanvas.width, faceCanvas.height);
+        }
+      }
+      loop();
+    }
+
+    // Landmark overlay drawn in the PiP — shows face ellipse
+    function drawFaceOverlay(faceLandmarksList, cx, cy, rx, ry) {
+      faceCtx.clearRect(0, 0, faceCanvas.width, faceCanvas.height);
+      if (!faceLandmarksList[0]) return;
+
+      const lms = faceLandmarksList[0];
+      const PW = faceCanvas.width;
+      const PH = faceCanvas.height;
+      const MW = canvas.width;
+      const MH = canvas.height;
+
+      // Draw landmark dots
+      faceCtx.fillStyle = 'rgba(0,245,212,0.5)';
+      for (const lm of lms) {
+        faceCtx.beginPath();
+        faceCtx.arc(lm.x * PW, lm.y * PH, 1, 0, Math.PI * 2);
+        faceCtx.fill();
+      }
+
+      // Draw face ellipse in PiP (map from canvas coords back to PiP coords)
+      // cx/cy are in canvas (flipped) space; PiP CSS is also flipped, so invert x back
+      const pipCx = (1 - cx / MW) * PW;
+      const pipRx = rx / MW * PW;
+      const pipCy = cy / MH * PH;
+      const pipRy = ry / MH * PH;
+
+      faceCtx.beginPath();
+      faceCtx.ellipse(pipCx, pipCy, pipRx, pipRy, 0, 0, Math.PI * 2);
+      faceCtx.strokeStyle = 'rgba(255,255,255,0.4)';
+      faceCtx.lineWidth = 1.5;
+      faceCtx.stroke();
+    }
+
+    // ── Start button ──────────────────────────────────────────────────────────
+    document.getElementById('startBtn').addEventListener('click', async () => {
+      document.getElementById('startOverlay').style.display = 'none';
+      await initMediaPipe();
+    });
+  </script>
+</body>
+</html>
