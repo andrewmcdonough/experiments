@@ -191,6 +191,7 @@ let smileActive = false;
 let headDownFrames = 0;
 let headUpFrames = 0;
 let sadnessActive = false;
+let noseYBaseline = null; // slowly-adapting baseline for head-bow detection
 let sadnessOverlayAlpha = 0;
 let flashAlpha = 0;
 let lightningTimer = 180 + Math.floor(Math.random() * 120);
@@ -669,22 +670,30 @@ function processGestures(result, noseX, noseY, rawNoseY) {
     gestureLabel = '💕 HEART SHOWER!';
   }
 
-  // Head down → sadness detection
-  if (rawNoseY > 0.58) {
-    headDownFrames++;
+  // Sadness detection: frown expression OR head bowed below its natural resting position
+  const frownL = smooth('frownL', getBlendshape(bs, 'mouthFrownLeft'));
+  const frownR = smooth('frownR', getBlendshape(bs, 'mouthFrownRight'));
+  const avgFrown = (frownL + frownR) / 2;
+
+  // Maintain a very slow-moving baseline so detection is relative to where the
+  // person normally sits — not an absolute screen position
+  if (noseYBaseline === null) noseYBaseline = rawNoseY;
+  noseYBaseline = noseYBaseline * 0.998 + rawNoseY * 0.002;
+  const headBowed = rawNoseY > noseYBaseline + 0.055; // nose moved ~5% below resting Y
+
+  const isSad = avgFrown > 0.3 || headBowed;
+
+  if (isSad) {
+    headDownFrames = Math.min(headDownFrames + 1, 120);
     headUpFrames = 0;
-  } else if (rawNoseY < 0.52) {
-    headUpFrames++;
-    if (headUpFrames > 30) headDownFrames = 0;
+  } else {
+    headUpFrames = Math.min(headUpFrames + 1, 120);
+    headDownFrames = Math.max(0, headDownFrames - 1);
   }
 
-  if (headDownFrames > 50 && !sadnessActive) {
-    sadnessActive = true;
-    gestureLabel = '🌧️ STORM!';
-  }
-  if (headDownFrames === 0 && sadnessActive) {
-    sadnessActive = false;
-  }
+  const wasActive = sadnessActive;
+  sadnessActive = headDownFrames > 40;
+  if (sadnessActive && !wasActive) gestureLabel = '🌧️ STORM!';
 
   if (gestureLabel) {
     gestureDisplay.textContent = gestureLabel;
