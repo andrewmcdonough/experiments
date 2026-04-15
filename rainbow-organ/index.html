@@ -1,0 +1,1065 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rainbow Organ</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0a0020;
+  font-family: 'Courier New', monospace;
+  overflow: hidden;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+}
+
+#title {
+  text-align: center;
+  font-size: 2.2em;
+  font-weight: bold;
+  letter-spacing: 6px;
+  padding: 10px 0 4px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+#canvas {
+  flex: 1;
+  display: block;
+  width: 100%;
+}
+
+#bottom {
+  flex-shrink: 0;
+  background: #10002a;
+  border-top: 2px solid #330066;
+  padding: 8px 8px 4px;
+}
+
+/* ── Piano keyboard ── */
+.octave-row {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 4px;
+  gap: 0;
+}
+
+.octave-label {
+  font-size: 9px;
+  color: #664488;
+  letter-spacing: 1px;
+  text-align: center;
+  margin-bottom: 1px;
+}
+
+.piano-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.key {
+  position: relative;
+  border-radius: 0 0 5px 5px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  padding-bottom: 3px;
+  font-size: 9px;
+  font-weight: bold;
+  transition: background 0.05s, box-shadow 0.05s, transform 0.05s;
+  flex-shrink: 0;
+}
+
+.key.white {
+  width: 38px;
+  height: 70px;
+  background: #f0e0ff;
+  border: 1px solid #aa88cc;
+  color: #440066;
+  margin: 0 1px;
+  z-index: 1;
+}
+
+.key.black {
+  width: 26px;
+  height: 44px;
+  background: #220033;
+  border: 1px solid #550077;
+  color: #cc88ff;
+  z-index: 2;
+  margin: 0 -13px;
+  align-self: flex-start;
+}
+
+.key .letter {
+  font-size: 10px;
+  font-weight: bold;
+  line-height: 1;
+}
+.key .note-name {
+  font-size: 8px;
+  opacity: 0.7;
+  line-height: 1;
+  margin-top: 1px;
+}
+
+.key.active.white {
+  transform: scaleY(0.95);
+  transform-origin: top;
+}
+.key.active.black {
+  transform: scaleY(0.93);
+  transform-origin: top;
+}
+
+/* ── Special keys legend ── */
+#special-keys {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid #220044;
+}
+
+.sp-key {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: #aa88cc;
+  transition: color 0.1s;
+}
+
+.sp-key .sp-label {
+  background: #220044;
+  border: 1px solid #440088;
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: #fff;
+  font-size: 9px;
+  letter-spacing: 1px;
+  min-width: 18px;
+  text-align: center;
+}
+
+.sp-key.active .sp-label {
+  box-shadow: 0 0 8px currentColor;
+}
+
+/* ── Overlay messages ── */
+#overlay-msg {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 3em;
+  font-weight: bold;
+  letter-spacing: 4px;
+  pointer-events: none;
+  opacity: 0;
+  text-align: center;
+  text-shadow: 0 0 30px currentColor;
+}
+</style>
+</head>
+<body>
+
+<div id="title">🌈 Rainbow Organ 🌈</div>
+<canvas id="canvas"></canvas>
+
+<div id="bottom">
+  <!-- Keyboard rows built by JS -->
+  <div id="keyboard-rows"></div>
+
+  <div id="special-keys">
+    <div class="sp-key" id="sk-space"><span class="sp-label">SPACE</span> Spin</div>
+    <div class="sp-key" id="sk-k"><span class="sp-label">K</span> Drums</div>
+    <div class="sp-key" id="sk-l"><span class="sp-label">L</span> Loop</div>
+    <div class="sp-key" id="sk-f"><span class="sp-label">F</span> Fireworks</div>
+    <div class="sp-key" id="sk-1"><span class="sp-label">1</span> Unicorn</div>
+    <div class="sp-key" id="sk-a"><span class="sp-label">A</span> Key</div>
+    <div class="sp-key" id="sk-esc"><span class="sp-label">ESC</span> Clear</div>
+  </div>
+</div>
+
+<div id="overlay-msg"></div>
+
+<script>
+// ─── Note definitions ─────────────────────────────────────────────────────────
+// MIDI note → frequency: 440 * 2^((n-69)/12)
+function midiToFreq(n) { return 440 * Math.pow(2, (n - 69) / 12); }
+
+// noteIndex 0=C 1=C# 2=D ... 11=B
+// Octave 3: midi 48-59, Octave 4: midi 60-71
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+
+function noteColor(noteIdx) {
+  return `hsl(${Math.round((noteIdx / 12) * 360)},100%,62%)`;
+}
+
+// keyboard key → { midi, noteIdx, label, type }
+const KEY_MAP = {
+  // Octave 3 white (Z row)
+  'z': { midi: 48, noteIdx: 0,  label: 'C3',  type: 'white' },
+  'x': { midi: 50, noteIdx: 2,  label: 'D3',  type: 'white' },
+  'c': { midi: 52, noteIdx: 4,  label: 'E3',  type: 'white' },
+  'v': { midi: 53, noteIdx: 5,  label: 'F3',  type: 'white' },
+  'b': { midi: 55, noteIdx: 7,  label: 'G3',  type: 'white' },
+  'n': { midi: 57, noteIdx: 9,  label: 'A3',  type: 'white' },
+  'm': { midi: 59, noteIdx: 11, label: 'B3',  type: 'white' },
+  // Octave 3 black (A row)
+  's': { midi: 49, noteIdx: 1,  label: 'C#3', type: 'black' },
+  'd': { midi: 51, noteIdx: 3,  label: 'D#3', type: 'black' },
+  'g': { midi: 54, noteIdx: 6,  label: 'F#3', type: 'black' },
+  'h': { midi: 56, noteIdx: 8,  label: 'G#3', type: 'black' },
+  'j': { midi: 58, noteIdx: 10, label: 'A#3', type: 'black' },
+  // Octave 4 white (Q row)
+  'q': { midi: 60, noteIdx: 0,  label: 'C4',  type: 'white' },
+  'w': { midi: 62, noteIdx: 2,  label: 'D4',  type: 'white' },
+  'e': { midi: 64, noteIdx: 4,  label: 'E4',  type: 'white' },
+  'r': { midi: 65, noteIdx: 5,  label: 'F4',  type: 'white' },
+  't': { midi: 67, noteIdx: 7,  label: 'G4',  type: 'white' },
+  'y': { midi: 69, noteIdx: 9,  label: 'A4',  type: 'white' },
+  'u': { midi: 71, noteIdx: 11, label: 'B4',  type: 'white' },
+  // Octave 4 black (number row)
+  '2': { midi: 61, noteIdx: 1,  label: 'C#4', type: 'black' },
+  '3': { midi: 63, noteIdx: 3,  label: 'D#4', type: 'black' },
+  '5': { midi: 66, noteIdx: 6,  label: 'F#4', type: 'black' },
+  '6': { midi: 68, noteIdx: 8,  label: 'G#4', type: 'black' },
+  '7': { midi: 70, noteIdx: 10, label: 'A#4', type: 'black' },
+};
+
+// ─── Build keyboard UI ────────────────────────────────────────────────────────
+// Octave 3: white keys Z X C V B N M, black keys S D (gap) G H J
+// Octave 4: white keys Q W E R T Y U, black keys 2 3 (gap) 5 6 7
+
+function buildPianoRow(whites, blacks, labelText) {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'text-align:center;margin-bottom:6px;';
+
+  const lbl = document.createElement('div');
+  lbl.className = 'octave-label';
+  lbl.textContent = labelText;
+  wrap.appendChild(lbl);
+
+  const pianoWrap = document.createElement('div');
+  pianoWrap.className = 'piano-wrap';
+  pianoWrap.style.cssText = 'display:inline-flex;position:relative;';
+
+  // White keys container
+  const whitesRow = document.createElement('div');
+  whitesRow.style.cssText = 'display:flex;';
+
+  whites.forEach(k => {
+    const info = KEY_MAP[k];
+    const el = document.createElement('div');
+    el.className = 'key white';
+    el.id = 'key-' + k;
+    el.innerHTML = `<span class="letter">${k.toUpperCase()}</span><span class="note-name">${info.label}</span>`;
+    whitesRow.appendChild(el);
+  });
+  pianoWrap.appendChild(whitesRow);
+
+  // Black keys overlay — position absolutely over the white keys
+  // White key width = 38+2(margin)=40px. Black keys sit between pairs.
+  // Positions (center of gap between adjacent white keys):
+  // Gap between white[0] and white[1]: 40px
+  // Gap between white[1] and white[2]: 80px
+  // No gap between white[2] and white[3] (E-F)
+  // Gap between white[3] and white[4]: 160px
+  // Gap between white[4] and white[5]: 200px
+  // Gap between white[5] and white[6]: 240px
+  // No gap between white[6] and white[0+1] (B-C)
+
+  // Black key positions (left offset from piano start, centered on gap):
+  // C# = between C(0) and D(1): center=40, black width=26 → left=40-13=27
+  // D# = between D(1) and E(2): center=80, → left=67
+  // F# = between F(3) and G(4): center=160, → left=147
+  // G# = between G(4) and A(5): center=200, → left=187
+  // A# = between A(5) and B(6): center=240, → left=227
+
+  const blackOffsets = { 0: 27, 1: 67, 2: 147, 3: 187, 4: 227 };
+  blacks.forEach((k, i) => {
+    if (!k) return;
+    const info = KEY_MAP[k];
+    const el = document.createElement('div');
+    el.className = 'key black';
+    el.id = 'key-' + k;
+    el.style.cssText = `position:absolute;left:${blackOffsets[i]}px;top:0;`;
+    el.innerHTML = `<span class="letter">${k.toUpperCase()}</span>`;
+    pianoWrap.appendChild(el);
+  });
+
+  wrap.appendChild(pianoWrap);
+  return wrap;
+}
+
+const kbRows = document.getElementById('keyboard-rows');
+// Octave 3
+kbRows.appendChild(buildPianoRow(
+  ['z','x','c','v','b','n','m'],
+  ['s','d',null,'g','h','j',null],
+  'LOWER OCTAVE'
+));
+// Octave 4
+kbRows.appendChild(buildPianoRow(
+  ['q','w','e','r','t','y','u'],
+  ['2','3',null,'5','6','7',null],
+  'UPPER OCTAVE'
+));
+
+// ─── Audio ────────────────────────────────────────────────────────────────────
+let audioCtx = null;
+let masterGain = null;
+let reverbNode = null;
+let transpose = 0;
+
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = 0.7;
+  masterGain.connect(audioCtx.destination);
+
+  // Simple reverb via convolver
+  const len = audioCtx.sampleRate * 1.5;
+  const buf = audioCtx.createBuffer(2, len, audioCtx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    for (let i = 0; i < len; i++) d[i] = (Math.random()*2-1) * Math.pow(1 - i/len, 2);
+  }
+  reverbNode = audioCtx.createConvolver();
+  reverbNode.buffer = buf;
+  const reverbGain = audioCtx.createGain();
+  reverbGain.gain.value = 0.25;
+  reverbNode.connect(reverbGain);
+  reverbGain.connect(masterGain);
+}
+
+// active notes: key → { osc, gain }
+const heldKeys = new Map();
+
+function startNote(key) {
+  if (heldKeys.has(key)) return;
+  initAudio();
+  const info = KEY_MAP[key];
+  if (!info) return;
+
+  const midi = info.midi + transpose;
+  const freq = midiToFreq(midi);
+
+  const osc = audioCtx.createOscillator();
+  osc.type = currentVoice;
+  osc.frequency.value = freq;
+
+  // Add a slight detuned oscillator for richness
+  const osc2 = audioCtx.createOscillator();
+  osc2.type = currentVoice;
+  osc2.frequency.value = freq * 1.003;
+
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(0, audioCtx.currentTime);
+  g.gain.linearRampToValueAtTime(0.4, audioCtx.currentTime + 0.015);
+
+  osc.connect(g);
+  osc2.connect(g);
+  g.connect(masterGain);
+  g.connect(reverbNode);
+
+  osc.start();
+  osc2.start();
+
+  heldKeys.set(key, { osc, osc2, gain: g });
+}
+
+function stopNote(key) {
+  if (!heldKeys.has(key)) return;
+  const { osc, osc2, gain } = heldKeys.get(key);
+  const t = audioCtx.currentTime;
+  gain.gain.setValueAtTime(gain.gain.value, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+  osc.stop(t + 0.35);
+  osc2.stop(t + 0.35);
+  heldKeys.delete(key);
+}
+
+let currentVoice = 'sine';
+const VOICES = ['sine', 'triangle', 'square', 'sawtooth'];
+let voiceIdx = 0;
+
+// ─── Drums ────────────────────────────────────────────────────────────────────
+let drumsOn = false;
+let drumStep = 0;
+let drumInterval = null;
+
+function playKick(time) {
+  const ctx = audioCtx;
+  const g = ctx.createGain();
+  g.connect(masterGain);
+  g.gain.setValueAtTime(0.6, time);
+  g.gain.exponentialRampToValueAtTime(0.001, time + 0.5);
+  const osc = ctx.createOscillator();
+  osc.connect(g);
+  osc.frequency.setValueAtTime(150, time);
+  osc.frequency.exponentialRampToValueAtTime(0.01, time + 0.5);
+  osc.start(time); osc.stop(time + 0.5);
+}
+
+function playSnare(time) {
+  const ctx = audioCtx;
+  const bufSize = ctx.sampleRate * 0.15;
+  const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < bufSize; i++) data[i] = Math.random()*2-1;
+  const src = ctx.createBufferSource(); src.buffer = buf;
+  const hpf = ctx.createBiquadFilter(); hpf.type='highpass'; hpf.frequency.value=1000;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.4, time);
+  g.gain.exponentialRampToValueAtTime(0.001, time + 0.15);
+  src.connect(hpf); hpf.connect(g); g.connect(masterGain);
+  src.start(time); src.stop(time + 0.15);
+}
+
+function playHihat(time) {
+  const ctx = audioCtx;
+  const bufSize = Math.floor(ctx.sampleRate * 0.05);
+  const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < bufSize; i++) data[i] = Math.random()*2-1;
+  const src = ctx.createBufferSource(); src.buffer = buf;
+  const hpf = ctx.createBiquadFilter(); hpf.type='highpass'; hpf.frequency.value=8000;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.2, time);
+  g.gain.exponentialRampToValueAtTime(0.001, time + 0.04);
+  src.connect(hpf); hpf.connect(g); g.connect(masterGain);
+  src.start(time); src.stop(time + 0.05);
+}
+
+const DRUM_PATTERN = {
+  kick:  [1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0],
+  snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
+  hihat: [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
+};
+
+function tickDrum() {
+  initAudio();
+  const t = audioCtx.currentTime;
+  if (DRUM_PATTERN.kick[drumStep])  playKick(t);
+  if (DRUM_PATTERN.snare[drumStep]) playSnare(t);
+  if (DRUM_PATTERN.hihat[drumStep]) {
+    playHihat(t);
+    // Spawn a tiny sparkle for the hihat
+    spawnDrumSparkle();
+  }
+  drumStep = (drumStep + 1) % 16;
+}
+
+function toggleDrums() {
+  initAudio();
+  drumsOn = !drumsOn;
+  if (drumsOn) {
+    drumStep = 0;
+    drumInterval = setInterval(tickDrum, (60/110/4)*1000); // 110bpm, 16th notes
+    document.getElementById('sk-k').style.color = '#ff88ff';
+  } else {
+    clearInterval(drumInterval);
+    drumInterval = null;
+    document.getElementById('sk-k').style.color = '';
+  }
+}
+
+// ─── Live Loop ────────────────────────────────────────────────────────────────
+let loopRecording = false;
+let loopPlaying = false;
+let loopNotes = [];
+let loopStartTime = 0;
+let loopPlaybackTimers = [];
+let loopDuration = 0;
+
+function startLoopRecord() {
+  loopNotes = [];
+  loopRecording = true;
+  loopStartTime = Date.now();
+  document.getElementById('sk-l').style.color = '#ff4444';
+  showOverlay('● REC', '#ff4444');
+}
+
+function stopLoopRecord() {
+  loopRecording = false;
+  loopDuration = Date.now() - loopStartTime;
+  document.getElementById('sk-l').style.color = '#44ff88';
+  startLoopPlayback();
+}
+
+function startLoopPlayback() {
+  stopLoopPlayback();
+  if (loopNotes.length === 0) return;
+  loopPlaying = true;
+  document.getElementById('sk-l').style.color = '#44ff88';
+
+  function scheduleLoop() {
+    const start = Date.now();
+    loopNotes.forEach(({ key, time }) => {
+      const t = loopPlaybackTimers;
+      t.push(setTimeout(() => {
+        const info = KEY_MAP[key];
+        if (!info) return;
+        triggerNoteVisual(key);
+        initAudio();
+        const midi = info.midi + transpose;
+        const freq = midiToFreq(midi);
+        const osc = audioCtx.createOscillator();
+        osc.type = currentVoice;
+        osc.frequency.value = freq;
+        const g = audioCtx.createGain();
+        g.gain.setValueAtTime(0, audioCtx.currentTime);
+        g.gain.linearRampToValueAtTime(0.25, audioCtx.currentTime + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
+        osc.connect(g); g.connect(masterGain);
+        osc.start(); osc.stop(audioCtx.currentTime + 0.45);
+        spawnNoteParticles(info.noteIdx, getKeyPos(key), true);
+      }, time));
+    });
+    // Schedule next iteration
+    t.push(setTimeout(scheduleLoop, loopDuration));
+  }
+  scheduleLoop();
+}
+
+function stopLoopPlayback() {
+  loopPlaying = false;
+  loopPlaybackTimers.forEach(id => clearTimeout(id));
+  loopPlaybackTimers = [];
+}
+
+function toggleLoop() {
+  if (!loopRecording && !loopPlaying) {
+    startLoopRecord();
+  } else if (loopRecording) {
+    stopLoopRecord();
+  } else {
+    // Stop loop
+    stopLoopPlayback();
+    loopNotes = [];
+    document.getElementById('sk-l').style.color = '';
+    showOverlay('LOOP OFF', '#8844ff');
+  }
+}
+
+// ─── Canvas & Particles ───────────────────────────────────────────────────────
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = canvas.offsetHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+const particles = [];
+
+function getKeyPos(key) {
+  const el = document.getElementById('key-' + key);
+  if (!el) return { x: canvas.width/2, y: canvas.height };
+  const rect = el.getBoundingClientRect();
+  return {
+    x: rect.left + rect.width/2,
+    y: rect.top
+  };
+}
+
+function spawnNoteParticles(noteIdx, pos, small = false) {
+  const color = noteColor(noteIdx);
+  const scale = small ? 0.6 : 1;
+  const count = small ? 6 : 12;
+
+  // Stars
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = (2 + Math.random() * 4) * scale;
+    particles.push({
+      type: 'star',
+      x: pos.x, y: pos.y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed - 2,
+      life: 1,
+      decay: 0.012 + Math.random() * 0.01,
+      color,
+      size: (4 + Math.random() * 6) * scale,
+      rotation: Math.random() * Math.PI,
+      spin: (Math.random() - 0.5) * 0.1,
+    });
+  }
+
+  // Hearts
+  for (let i = 0; i < (small ? 1 : 2); i++) {
+    particles.push({
+      type: 'heart',
+      x: pos.x + (Math.random()-0.5)*30,
+      y: pos.y,
+      vx: (Math.random()-0.5)*1.5,
+      vy: -(2 + Math.random()*2),
+      life: 1,
+      decay: 0.008,
+      color,
+      size: (12 + Math.random()*10) * scale,
+      wobble: 0,
+    });
+  }
+
+  // Sparkles
+  for (let i = 0; i < 4; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = (1 + Math.random() * 3) * scale;
+    particles.push({
+      type: 'sparkle',
+      x: pos.x, y: pos.y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed - 1,
+      life: 1,
+      decay: 0.02 + Math.random() * 0.02,
+      color,
+      size: (3 + Math.random() * 4) * scale,
+    });
+  }
+
+  // Note symbol
+  if (!small && Math.random() < 0.5) {
+    particles.push({
+      type: 'notesym',
+      x: pos.x + (Math.random()-0.5)*20,
+      y: pos.y - 10,
+      vx: (Math.random()-0.5),
+      vy: -1.5 - Math.random(),
+      life: 1,
+      decay: 0.007,
+      color,
+      size: 16 + Math.random()*8,
+      sym: Math.random() < 0.5 ? '♪' : '♫',
+    });
+  }
+}
+
+function spawnSwirls(cx, cy) {
+  for (let i = 0; i < 40; i++) {
+    const angle = (i / 40) * Math.PI * 2;
+    const speed = 3 + Math.random() * 5;
+    particles.push({
+      type: 'swirl',
+      x: cx, y: cy,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1,
+      decay: 0.008,
+      color: `hsl(${(i/40)*360},100%,60%)`,
+      size: 8 + Math.random() * 8,
+      arcLen: 0.8 + Math.random() * 1.2,
+      angle,
+    });
+  }
+}
+
+function spawnFireworks(cx, cy) {
+  for (let burst = 0; burst < 5; burst++) {
+    const bx = cx + (Math.random()-0.5) * canvas.width * 0.6;
+    const by = cy + (Math.random()-0.5) * canvas.height * 0.4;
+    const hue = Math.random() * 360;
+    for (let i = 0; i < 20; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 2 + Math.random() * 6;
+      particles.push({
+        type: 'firework',
+        x: bx, y: by,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 1,
+        decay: 0.01 + Math.random() * 0.01,
+        color: `hsl(${hue + Math.random()*30},100%,65%)`,
+        size: 3 + Math.random() * 4,
+        trail: [],
+      });
+    }
+  }
+}
+
+function spawnDrumSparkle() {
+  const x = Math.random() * canvas.width;
+  const y = canvas.height * 0.7 + Math.random() * canvas.height * 0.2;
+  particles.push({
+    type: 'sparkle',
+    x, y,
+    vx: (Math.random()-0.5)*3,
+    vy: -1 - Math.random()*2,
+    life: 1,
+    decay: 0.04,
+    color: `hsl(${Math.random()*360},100%,70%)`,
+    size: 4,
+  });
+}
+
+function spawnUnicorn() {
+  const fromLeft = Math.random() < 0.5;
+  const y = 80 + Math.random() * (canvas.height * 0.5);
+  particles.push({
+    type: 'unicorn',
+    x: fromLeft ? -60 : canvas.width + 60,
+    y,
+    vx: fromLeft ? 4 + Math.random()*3 : -(4 + Math.random()*3),
+    vy: (Math.random()-0.5) * 0.5,
+    life: 1,
+    decay: 0.003,
+    size: 48,
+    trailHue: 0,
+    trail: [],
+  });
+}
+
+// ─── Draw helpers ─────────────────────────────────────────────────────────────
+function drawStar(ctx, x, y, size, rotation, color, alpha) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(x, y);
+  ctx.rotate(rotation);
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const r = i % 2 === 0 ? size : size * 0.4;
+    if (i === 0) ctx.moveTo(Math.cos(a)*r, Math.sin(a)*r);
+    else ctx.lineTo(Math.cos(a)*r, Math.sin(a)*r);
+  }
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 10;
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawHeart(ctx, x, y, size, color, alpha) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(x, y);
+  ctx.beginPath();
+  ctx.moveTo(0, -size*0.3);
+  ctx.bezierCurveTo(size*0.5, -size, size, -size*0.3, size*0.5, size*0.3);
+  ctx.bezierCurveTo(size*0.2, size*0.7, 0, size, 0, size);
+  ctx.bezierCurveTo(0, size, -size*0.2, size*0.7, -size*0.5, size*0.3);
+  ctx.bezierCurveTo(-size, -size*0.3, -size*0.5, -size, 0, -size*0.3);
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 12;
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawSparkle(ctx, x, y, size, color, alpha) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 8;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x, y, size, 0, Math.PI*2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x - size*1.5, y); ctx.lineTo(x + size*1.5, y);
+  ctx.moveTo(x, y - size*1.5); ctx.lineTo(x, y + size*1.5);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawSwirl(ctx, p) {
+  ctx.save();
+  ctx.globalAlpha = p.life * 0.8;
+  ctx.strokeStyle = p.color;
+  ctx.shadowColor = p.color;
+  ctx.shadowBlur = 6;
+  ctx.lineWidth = p.size * p.life;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, p.size * 2, p.angle, p.angle + p.arcLen);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawFirework(ctx, p) {
+  ctx.save();
+  ctx.globalAlpha = p.life;
+  ctx.fillStyle = p.color;
+  ctx.shadowColor = p.color;
+  ctx.shadowBlur = 8;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI*2);
+  ctx.fill();
+  // Trail
+  if (p.trail.length > 1) {
+    ctx.globalAlpha = p.life * 0.4;
+    ctx.strokeStyle = p.color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(p.trail[0].x, p.trail[0].y);
+    p.trail.forEach(pt => ctx.lineTo(pt.x, pt.y));
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ─── Update & render particles ────────────────────────────────────────────────
+function updateParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life -= p.decay;
+
+    if (p.type === 'star') {
+      p.vy += 0.05; // gravity
+      p.rotation = (p.rotation || 0) + (p.spin || 0);
+    }
+    if (p.type === 'heart') {
+      p.wobble = (p.wobble || 0) + 0.08;
+      p.vx = Math.sin(p.wobble) * 0.8;
+    }
+    if (p.type === 'firework') {
+      p.vy += 0.08;
+      p.trail.push({ x: p.x, y: p.y });
+      if (p.trail.length > 8) p.trail.shift();
+    }
+    if (p.type === 'unicorn') {
+      p.trail.push({ x: p.x, y: p.y, hue: (p.trailHue || 0) });
+      p.trailHue = ((p.trailHue || 0) + 5) % 360;
+      if (p.trail.length > 20) p.trail.shift();
+      // Out of screen = kill
+      if (p.x < -100 || p.x > canvas.width + 100) p.life = 0;
+    }
+
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawParticles() {
+  particles.forEach(p => {
+    const alpha = Math.max(0, p.life);
+    switch(p.type) {
+      case 'star':
+        drawStar(ctx, p.x, p.y, p.size, p.rotation || 0, p.color, alpha);
+        break;
+      case 'heart':
+        drawHeart(ctx, p.x, p.y, p.size, p.color, alpha);
+        break;
+      case 'sparkle':
+        drawSparkle(ctx, p.x, p.y, p.size, p.color, alpha);
+        break;
+      case 'swirl':
+        drawSwirl(ctx, p);
+        break;
+      case 'firework':
+        drawFirework(ctx, p);
+        break;
+      case 'notesym':
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = p.color;
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur = 10;
+        ctx.font = `bold ${p.size}px serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText(p.sym, p.x, p.y);
+        ctx.restore();
+        break;
+      case 'unicorn':
+        // Rainbow trail
+        if (p.trail.length > 1) {
+          for (let i = 1; i < p.trail.length; i++) {
+            const t = p.trail[i];
+            const tAlpha = (i / p.trail.length) * p.life * 0.8;
+            ctx.save();
+            ctx.globalAlpha = tAlpha;
+            ctx.fillStyle = `hsl(${t.hue},100%,60%)`;
+            ctx.beginPath();
+            ctx.arc(t.x, t.y, 4 * (i/p.trail.length), 0, Math.PI*2);
+            ctx.fill();
+            ctx.restore();
+          }
+        }
+        // Unicorn emoji
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.font = `${p.size}px serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        // Flip if going left
+        if (p.vx < 0) {
+          ctx.translate(p.x, p.y);
+          ctx.scale(-1, 1);
+          ctx.fillText('🦄', 0, 0);
+        } else {
+          ctx.fillText('🦄', p.x, p.y);
+        }
+        ctx.restore();
+        break;
+    }
+  });
+}
+
+// ─── Title hue animation ──────────────────────────────────────────────────────
+let titleHue = 0;
+const titleEl = document.getElementById('title');
+
+// ─── Overlay message ──────────────────────────────────────────────────────────
+const overlayEl = document.getElementById('overlay-msg');
+let overlayTimeout = null;
+
+function showOverlay(text, color) {
+  overlayEl.textContent = text;
+  overlayEl.style.color = color;
+  overlayEl.style.opacity = '1';
+  if (overlayTimeout) clearTimeout(overlayTimeout);
+  overlayTimeout = setTimeout(() => {
+    overlayEl.style.transition = 'opacity 0.8s';
+    overlayEl.style.opacity = '0';
+  }, 800);
+}
+
+// ─── Key visual activation ────────────────────────────────────────────────────
+function triggerNoteVisual(key) {
+  const info = KEY_MAP[key];
+  if (!info) return;
+  const el = document.getElementById('key-' + key);
+  if (!el) return;
+  const color = noteColor(info.noteIdx);
+  el.classList.add('active');
+  el.style.background = color;
+  el.style.boxShadow = `0 0 18px ${color}, 0 0 6px ${color}`;
+  el.style.color = '#fff';
+}
+
+function releaseNoteVisual(key) {
+  const info = KEY_MAP[key];
+  if (!info) return;
+  const el = document.getElementById('key-' + key);
+  if (!el) return;
+  el.classList.remove('active');
+  el.style.background = '';
+  el.style.boxShadow = '';
+  el.style.color = '';
+}
+
+// ─── Keyboard events ──────────────────────────────────────────────────────────
+const pressedKeys = new Set();
+
+document.addEventListener('keydown', e => {
+  const key = e.key.toLowerCase();
+  if (e.repeat) return;
+  pressedKeys.add(key);
+
+  if (KEY_MAP[key]) {
+    initAudio();
+    startNote(key);
+    const info = KEY_MAP[key];
+    triggerNoteVisual(key);
+    const pos = getKeyPos(key);
+    spawnNoteParticles(info.noteIdx, pos);
+    if (loopRecording) {
+      loopNotes.push({ key, time: Date.now() - loopStartTime });
+    }
+    return;
+  }
+
+  switch(key) {
+    case ' ':
+      e.preventDefault();
+      transpose = (transpose + 1) % 12;
+      const keyNames = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+      showOverlay(`Key: ${keyNames[transpose]}`, `hsl(${(transpose/12)*360},100%,70%)`);
+      spawnSwirls(canvas.width/2, canvas.height/2);
+      // Flash all keys briefly
+      Object.keys(KEY_MAP).forEach(k => {
+        const el = document.getElementById('key-' + k);
+        if (el) {
+          const c = noteColor(KEY_MAP[k].noteIdx);
+          el.style.background = c;
+          el.style.boxShadow = `0 0 12px ${c}`;
+          setTimeout(() => {
+            el.style.background = '';
+            el.style.boxShadow = '';
+          }, 300);
+        }
+      });
+      break;
+    case 'k':
+      toggleDrums();
+      break;
+    case 'l':
+      toggleLoop();
+      break;
+    case 'f':
+      initAudio();
+      spawnFireworks(canvas.width/2, canvas.height/2);
+      document.getElementById('sk-f').style.color = '#ffff44';
+      setTimeout(() => document.getElementById('sk-f').style.color = '', 400);
+      break;
+    case '1':
+      spawnUnicorn();
+      document.getElementById('sk-1').style.color = '#ff88ff';
+      setTimeout(() => document.getElementById('sk-1').style.color = '', 400);
+      break;
+    case 'a':
+      voiceIdx = (voiceIdx + 1) % VOICES.length;
+      currentVoice = VOICES[voiceIdx];
+      const voiceNames = { sine:'Flute', triangle:'Bell', square:'Organ', sawtooth:'Violin' };
+      showOverlay(voiceNames[currentVoice], '#88ffff');
+      document.getElementById('sk-a').style.color = '#88ffff';
+      setTimeout(() => document.getElementById('sk-a').style.color = '', 400);
+      break;
+    case 'escape':
+      particles.length = 0;
+      break;
+  }
+});
+
+document.addEventListener('keyup', e => {
+  const key = e.key.toLowerCase();
+  pressedKeys.delete(key);
+  if (KEY_MAP[key]) {
+    stopNote(key);
+    releaseNoteVisual(key);
+  }
+});
+
+// ─── RAF loop ─────────────────────────────────────────────────────────────────
+function loop() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  updateParticles();
+  drawParticles();
+
+  // Animate title hue
+  titleHue = (titleHue + 1) % 360;
+  titleEl.style.background = `linear-gradient(90deg,
+    hsl(${titleHue},100%,70%),
+    hsl(${(titleHue+60)%360},100%,70%),
+    hsl(${(titleHue+120)%360},100%,70%),
+    hsl(${(titleHue+180)%360},100%,70%),
+    hsl(${(titleHue+240)%360},100%,70%),
+    hsl(${(titleHue+300)%360},100%,70%))`;
+  titleEl.style.webkitBackgroundClip = 'text';
+  titleEl.style.webkitTextFillColor = 'transparent';
+  titleEl.style.backgroundClip = 'text';
+
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>

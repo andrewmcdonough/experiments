@@ -9,3 +9,4 @@ A few experimental projects.
 * [bubbleface](https://experiments.andrewmcdonough.com/bubbleface/): Paint the dot grid with your face
 * [bubbleface-mono](https://experiments.andrewmcdonough.com/bubbleface-mono/): Face painting with a single brush colour — press space to cycle
 * [bodyart](https://experiments.andrewmcdonough.com/bodyart/): Body-movement art — pose and gesture to paint with particles, arcs and sparks
+* [rainbow-organ](https://experiments.andrewmcdonough.com/rainbow-organ/): A kids' rainbow musical instrument — play chromatic notes with your keyboard, summon unicorns, hearts and stars
