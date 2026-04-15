@@ -373,6 +373,9 @@ function draw() {
   // Clouds
   clouds.forEach(c => drawCloud(c.x, c.y, c.r));
 
+  // Title in cloud formation
+  drawCloudText();
+
   // ── Ground ──
   // Main fairway
   ctx.fillStyle = '#4ade80';
@@ -456,6 +459,22 @@ function draw() {
 }
 
 // ─── Drawing Helpers ──────────────────────────────────────────────────────────
+
+function drawCloudText() {
+  const text = "Matthew McAuley's Golf Shooter";
+  const fontSize = Math.max(18, Math.floor(W / 42));
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.font = `bold ${fontSize}px "Courier New", monospace`;
+  // Shadow
+  ctx.fillStyle = 'rgba(80,140,190,0.6)';
+  ctx.fillText(text, W / 2 + 2, H * 0.26 + 3);
+  // White text
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  ctx.fillText(text, W / 2, H * 0.26);
+  ctx.restore();
+}
+
 function drawCloud(x, y, r) {
   ctx.save();
   ctx.fillStyle = 'rgba(255,255,255,0.88)';
