@@ -10,3 +10,4 @@ A few experimental projects.
 * [bubbleface-mono](https://experiments.andrewmcdonough.com/bubbleface-mono/): Face painting with a single brush colour — press space to cycle
 * [bodyart](https://experiments.andrewmcdonough.com/bodyart/): Body-movement art — pose and gesture to paint with particles, arcs and sparks
 * [rainbow-organ](https://experiments.andrewmcdonough.com/rainbow-organ/): A kids' rainbow musical instrument — play chromatic notes with your keyboard, summon unicorns, hearts and stars
+* [golf-shooter](https://experiments.andrewmcdonough.com/golf-shooter/): A Fortnite-inspired golf course shooter — blast golfers with arrow keys and X, watch the robot claw carry them off
