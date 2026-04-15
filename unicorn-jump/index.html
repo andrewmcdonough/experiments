@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Unicorn Jump</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #000; overflow: hidden; font-family: 'Courier New', monospace; }
+    canvas { display: block; position: fixed; top: 0; left: 0; }
+    #hint {
+      position: fixed;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.5);
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint">SPACE to jump</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const hint = document.getElementById('hint');
+
+let W, H, GROUND_Y, TRACK_TOP;
+
+function resize() {
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  GROUND_Y  = Math.floor(H * 0.70);
+  TRACK_TOP = Math.floor(H * 0.48);
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ─── Input ───────────────────────────────────────────────────────────────────
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); handleJump(); }
+});
+canvas.addEventListener('click', handleJump);
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+const GRAVITY      = 0.6;
+const JUMP_VY      = -15;
+const UNICORN_X    = 160;
+const UNICORN_W    = 90;
+const UNICORN_H    = 60;
+const MAX_LIVES    = 3;
+const RAINBOW      = ['#ff0000','#ff7700','#ffdd00','#00cc44','#2299ff','#7744ee','#dd44cc'];
+
+// ─── Clouds ──────────────────────────────────────────────────────────────────
+const clouds = [
+  { x: W * 0.15, y: 0, r: 28, speed: 0.4 },
+  { x: W * 0.42, y: 0, r: 40, speed: 0.25 },
+  { x: W * 0.70, y: 0, r: 32, speed: 0.35 },
+  { x: W * 0.88, y: 0, r: 22, speed: 0.45 },
+];
+// Y positions set after first resize
+function initClouds() {
+  const ys = [0.10, 0.15, 0.09, 0.13];
+  clouds.forEach((c, i) => { c.y = H * ys[i]; c.x = W * [0.15,0.42,0.70,0.88][i]; });
+}
+initClouds();
+window.addEventListener('resize', initClouds);
+
+// ─── State ───────────────────────────────────────────────────────────────────
+let unicorn, obstacles, score, lives, frame, gameOver, speed, spawnTimer, invincible;
+
+function initGame() {
+  unicorn = {
+    y: GROUND_Y - UNICORN_H,
+    vy: 0,
+    onGround: true,
+    jumpCount: 0,   // double-jump allowed once
+    wingFlap: 0,
+    legFrame: 0,
+    tailWave: 0,
+    hitFlash: 0,
+  };
+  obstacles  = [];
+  score      = 0;
+  lives      = MAX_LIVES;
+  frame      = 0;
+  gameOver   = false;
+  speed      = 5;
+  spawnTimer = nextSpawnDelay();
+  invincible = 0;
+}
+
+function nextSpawnDelay() {
+  return Math.floor(120 + Math.random() * 100);
+}
+
+function handleJump() {
+  if (gameOver) { if (lives === 0) { initGame(); showHint(); } return; }
+  if (unicorn.onGround) {
+    unicorn.vy = JUMP_VY;
+    unicorn.onGround = false;
+    unicorn.jumpCount = 1;
+  } else if (unicorn.jumpCount < 2) {
+    unicorn.vy = JUMP_VY * 0.85;
+    unicorn.jumpCount = 2;
+  }
+}
+
+// ─── Update ──────────────────────────────────────────────────────────────────
+function update() {
+  if (gameOver) return;
+  frame++;
+  speed = 5 + score * 0.08;
+
+  // Unicorn physics
+  unicorn.vy += GRAVITY;
+  unicorn.y  += unicorn.vy;
+  unicorn.tailWave += 0.12;
+  unicorn.wingFlap += unicorn.onGround ? 0.08 : 0.22;
+
+  const gnd = GROUND_Y - UNICORN_H;
+  if (unicorn.y >= gnd) {
+    unicorn.y       = gnd;
+    unicorn.vy      = 0;
+    unicorn.onGround = true;
+    unicorn.jumpCount = 0;
+    unicorn.legFrame += 0.2;
+  } else {
+    unicorn.legFrame += 0.08;
+  }
+
+  if (invincible > 0) invincible--;
+  if (unicorn.hitFlash > 0) unicorn.hitFlash--;
+
+  // Clouds drift
+  clouds.forEach(c => { c.x -= c.speed; if (c.x < -80) c.x = W + 80; });
+
+  // Spawn obstacles
+  spawnTimer--;
+  if (spawnTimer <= 0) {
+    spawnObstacle();
+    spawnTimer = nextSpawnDelay();
+  }
+
+  // Move obstacles
+  obstacles = obstacles.filter(o => {
+    o.x -= speed;
+    // Score when passed
+    if (!o.scored && o.x + o.w < UNICORN_X) {
+      o.scored = true;
+      score++;
+    }
+    return o.x + o.w > -20;
+  });
+
+  // Collision
+  if (invincible === 0) {
+    for (const o of obstacles) {
+      if (hitTest(unicorn, o)) {
+        lives--;
+        invincible = 80;
+        unicorn.hitFlash = 40;
+        if (lives <= 0) { gameOver = true; hideHint(); }
+        break;
+      }
+    }
+  }
+}
+
+function spawnObstacle() {
+  const w = 22 + Math.random() * 14;
+  // Height: short or tall hurdle
+  const tall = Math.random() < 0.4;
+  const h = tall ? 80 : 52;
+  obstacles.push({ x: W + 30, w, h, scored: false });
+}
+
+function hitTest(u, o) {
+  // Unicorn hitbox: slightly inset
+  const ux1 = UNICORN_X - 30, ux2 = UNICORN_X + 30;
+  const uy1 = u.y + 8,        uy2 = u.y + UNICORN_H - 4;
+  const ox1 = o.x + 3,        ox2 = o.x + o.w - 3;
+  const oy1 = GROUND_Y - o.h, oy2 = GROUND_Y;
+  return ux2 > ox1 && ux1 < ox2 && uy2 > oy1 && uy1 < oy2;
+}
+
+// ─── Draw ────────────────────────────────────────────────────────────────────
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  drawSky();
+  drawCrowd();
+  drawTrack();
+  obstacles.forEach(drawObstacle);
+  drawUnicorn();
+  drawHUD();
+  if (gameOver) drawGameOver();
+}
+
+function drawSky() {
+  const g = ctx.createLinearGradient(0, 0, 0, TRACK_TOP);
+  g.addColorStop(0, '#7ed4f7');
+  g.addColorStop(1, '#d8f0ff');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, TRACK_TOP);
+
+  // Sun
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(W - 90, 60, 38, 0, Math.PI * 2);
+  ctx.fillStyle = '#fff59d';
+  ctx.fill();
+  ctx.restore();
+
+  // Clouds
+  clouds.forEach(c => {
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(c.x + c.r * 0.7, c.y + c.r * 0.15, c.r * 0.7, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(c.x - c.r * 0.6, c.y + c.r * 0.2, c.r * 0.6, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  });
+
+  // Distant grandstand silhouette
+  ctx.fillStyle = '#c8dde8';
+  ctx.fillRect(0, TRACK_TOP - 38, W, 40);
+  // Crowd heads — alternating bumps
+  ctx.fillStyle = '#b8cfd8';
+  const headSpacing = 18;
+  for (let hx = 5; hx < W; hx += headSpacing) {
+    const hOff = (Math.floor(hx / headSpacing) % 2) * 6;
+    ctx.beginPath();
+    ctx.arc(hx, TRACK_TOP - 32 + hOff, 7, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Coloured pennants
+  const pennantColors = ['#ff4444','#ffdd00','#44cc44','#4499ff','#cc44ff'];
+  for (let px2 = 20; px2 < W; px2 += 60) {
+    ctx.strokeStyle = '#999';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(px2, TRACK_TOP - 60); ctx.lineTo(px2, TRACK_TOP - 38); ctx.stroke();
+    ctx.fillStyle = pennantColors[Math.floor(px2 / 60) % pennantColors.length];
+    ctx.beginPath();
+    ctx.moveTo(px2, TRACK_TOP - 60);
+    ctx.lineTo(px2 + 14, TRACK_TOP - 54);
+    ctx.lineTo(px2, TRACK_TOP - 48);
+    ctx.fill();
+  }
+}
+
+function drawCrowd() {
+  // Fence rail between crowd and track
+  ctx.fillStyle = '#e8e8e8';
+  ctx.fillRect(0, TRACK_TOP, W, 8);
+  ctx.fillStyle = '#ccc';
+  ctx.fillRect(0, TRACK_TOP + 10, W, 4);
+  for (let fx = 0; fx < W; fx += 30) {
+    ctx.fillStyle = '#ddd';
+    ctx.fillRect(fx, TRACK_TOP - 5, 6, 20);
+  }
+}
+
+// Scrolling track markings offset
+let trackOffset = 0;
+
+function drawTrack() {
+  trackOffset = (trackOffset + speed * 0.5) % 80;
+
+  // Dirt track
+  const tg = ctx.createLinearGradient(0, TRACK_TOP + 8, 0, H);
+  tg.addColorStop(0, '#c8a878');
+  tg.addColorStop(0.3, '#b89860');
+  tg.addColorStop(1, '#a08040');
+  ctx.fillStyle = tg;
+  ctx.fillRect(0, TRACK_TOP + 8, W, H - TRACK_TOP);
+
+  // Track lane markings
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 3;
+  ctx.setLineDash([40, 40]);
+  ctx.lineDashOffset = -trackOffset;
+  ctx.beginPath();
+  ctx.moveTo(0, TRACK_TOP + 28); ctx.lineTo(W, TRACK_TOP + 28);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Ground shadow line
+  ctx.fillStyle = 'rgba(0,0,0,0.12)';
+  ctx.fillRect(0, GROUND_Y + 2, W, 6);
+}
+
+function drawObstacle(o) {
+  const x = o.x, w = o.w, h = o.h;
+  const y = GROUND_Y - h;
+
+  // Posts
+  ctx.fillStyle = '#555';
+  ctx.fillRect(x - 2, y, 6, h);
+  ctx.fillRect(x + w - 4, y, 6, h);
+
+  // Cross-rails in rainbow stripes
+  const railH = 10;
+  const railCount = Math.max(3, Math.floor(h / 18));
+  const stripeH = h / railCount;
+  for (let i = 0; i < railCount; i++) {
+    const ry = y + i * stripeH;
+    ctx.fillStyle = RAINBOW[i % RAINBOW.length];
+    ctx.beginPath();
+    ctx.roundRect(x, ry + (stripeH - railH) / 2, w, railH, 3);
+    ctx.fill();
+    // Shine
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.fillRect(x + 2, ry + (stripeH - railH) / 2 + 1, w - 4, 3);
+  }
+
+  // Shadow on track
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.beginPath();
+  ctx.ellipse(x + w / 2, GROUND_Y + 3, w * 0.7, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawUnicorn() {
+  const u = unicorn;
+  const cx = UNICORN_X;
+  const cy = u.y + UNICORN_H / 2;
+
+  ctx.save();
+  if (u.hitFlash > 0 && Math.floor(u.hitFlash / 4) % 2 === 0) ctx.globalAlpha = 0.3;
+  ctx.translate(cx, cy);
+
+  const airborne = !u.onGround;
+  const leg = Math.sin(u.legFrame);
+  const wing = Math.sin(u.wingFlap);
+  const tail = Math.sin(u.tailWave);
+
+  // Shadow on ground
+  if (!airborne) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    ctx.beginPath();
+    ctx.ellipse(0, GROUND_Y - cy + UNICORN_H * 0.55, 34, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // ── Tail ──
+  const tailColors = RAINBOW;
+  for (let t = 0; t < 7; t++) {
+    const tr = 5 - t * 0.4;
+    const tOff = tail * (8 + t * 2);
+    ctx.strokeStyle = tailColors[t];
+    ctx.lineWidth = tr * 2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-32, 5 + t * 2);
+    ctx.quadraticCurveTo(-46 + tOff, 15 + t * 3, -36 + tOff * 0.5, 28 + t * 2);
+    ctx.stroke();
+  }
+
+  // ── Wings ──
+  const wingSpread = airborne ? 1 : 0.4 + wing * 0.3;
+  // Upper wing
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.beginPath();
+  ctx.moveTo(-5, -8);
+  ctx.bezierCurveTo(-10, -28 - wingSpread * 22, 20, -30 - wingSpread * 28, 26, -10);
+  ctx.bezierCurveTo(16, -14, 0, -10, -5, -8);
+  ctx.fill();
+  // Wing feather lines
+  ctx.strokeStyle = 'rgba(200,220,255,0.7)';
+  ctx.lineWidth = 1.5;
+  for (let fi = 0; fi < 4; fi++) {
+    const t2 = fi / 3;
+    const wx = -5 + t2 * 31;
+    const wy = -8 - t2 * 2;
+    ctx.beginPath();
+    ctx.moveTo(wx, wy);
+    ctx.lineTo(wx + 2 - t2 * 8, wy - wingSpread * (14 + fi * 4));
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // ── Body ──
+  ctx.fillStyle = '#f0e8ff';
+  ctx.beginPath();
+  ctx.ellipse(0, 4, 34, 20, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Body shading
+  ctx.fillStyle = 'rgba(180,160,220,0.3)';
+  ctx.beginPath();
+  ctx.ellipse(0, 10, 30, 12, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ── Legs ──
+  ctx.strokeStyle = '#d8ccf0';
+  ctx.lineWidth = 8;
+  ctx.lineCap = 'round';
+  if (airborne) {
+    // Tuck legs
+    ctx.beginPath(); ctx.moveTo(-16, 14); ctx.lineTo(-20, 26); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-6, 16);  ctx.lineTo(-8, 28);  ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(8, 16);   ctx.lineTo(10, 28);  ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(18, 14);  ctx.lineTo(22, 26);  ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.moveTo(-16, 14); ctx.lineTo(-18 + leg * 8, UNICORN_H * 0.5 - 4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-6,  16); ctx.lineTo(-8  - leg * 8, UNICORN_H * 0.5 - 4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(8,   16); ctx.lineTo(10  + leg * 8, UNICORN_H * 0.5 - 4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(18,  14); ctx.lineTo(20  - leg * 8, UNICORN_H * 0.5 - 4); ctx.stroke();
+  }
+  // Hooves
+  ctx.fillStyle = '#b8a0d0';
+  const hoofPos = airborne
+    ? [[-20,28],[-8,30],[10,30],[22,28]]
+    : [[-18+leg*8, UNICORN_H*.5-2],[-8-leg*8, UNICORN_H*.5-2],[10+leg*8, UNICORN_H*.5-2],[20-leg*8, UNICORN_H*.5-2]];
+  hoofPos.forEach(([hx,hy]) => {
+    ctx.beginPath(); ctx.ellipse(hx, hy, 5, 4, 0, 0, Math.PI * 2); ctx.fill();
+  });
+
+  // ── Neck & Head ──
+  ctx.fillStyle = '#f0e8ff';
+  ctx.beginPath();
+  ctx.moveTo(18, -8);
+  ctx.bezierCurveTo(24, -18, 30, -22, 34, -16);
+  ctx.bezierCurveTo(30, -8, 24, -4, 18, 4);
+  ctx.fill();
+
+  // Head
+  ctx.fillStyle = '#f4ecff';
+  ctx.beginPath();
+  ctx.ellipse(38, -18, 16, 12, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Muzzle
+  ctx.fillStyle = '#e8d8f8';
+  ctx.beginPath();
+  ctx.ellipse(50, -14, 9, 7, 0.2, 0, Math.PI * 2);
+  ctx.fill();
+  // Nostril
+  ctx.fillStyle = '#c0a0d8';
+  ctx.beginPath(); ctx.ellipse(53, -13, 2.5, 2, 0.3, 0, Math.PI * 2); ctx.fill();
+
+  // Eye
+  ctx.fillStyle = '#2d1a4a';
+  ctx.beginPath(); ctx.arc(34, -21, 4, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(35, -22, 1.5, 0, Math.PI * 2); ctx.fill();
+  // Lashes
+  ctx.strokeStyle = '#2d1a4a';
+  ctx.lineWidth = 1.5;
+  for (let l = 0; l < 3; l++) {
+    const la = -Math.PI * 0.7 + l * 0.2;
+    ctx.beginPath();
+    ctx.moveTo(34 + Math.cos(la) * 4, -21 + Math.sin(la) * 4);
+    ctx.lineTo(34 + Math.cos(la) * 7, -21 + Math.sin(la) * 7);
+    ctx.stroke();
+  }
+
+  // ── Mane ──
+  for (let m = 0; m < 7; m++) {
+    const mw = tail * (3 + m) * 0.5;
+    ctx.strokeStyle = RAINBOW[m];
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(28 - m * 1.5, -24 + m * 1.5);
+    ctx.quadraticCurveTo(22 - m * 2 + mw, -30 + m, 18 - m * 1.5 + mw, -18 + m * 2);
+    ctx.stroke();
+  }
+
+  // ── Horn ──
+  const hornColors = ['#ff88cc','#ff44aa','#ee00aa'];
+  for (let h2 = 0; h2 < 3; h2++) {
+    ctx.strokeStyle = hornColors[h2];
+    ctx.lineWidth = 4 - h2 * 1.2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(30 + h2 * 1.5, -28);
+    ctx.lineTo(36 - h2, -50);
+    ctx.stroke();
+  }
+  // Horn shine
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(32, -30);
+  ctx.lineTo(35, -48);
+  ctx.stroke();
+  // Sparkles on horn when airborne
+  if (airborne) {
+    const sparkles = [[38,-46],[42,-38],[28,-40]];
+    sparkles.forEach(([sx, sy], si) => {
+      const phase = frame * 0.15 + si * 1.2;
+      const a = 0.5 + 0.5 * Math.sin(phase);
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.fillStyle = RAINBOW[si * 2];
+      ctx.beginPath();
+      ctx.arc(sx, sy, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    });
+  }
+
+  ctx.restore();
+}
+
+function drawHUD() {
+  // Score
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.roundRect(14, 14, 150, 46, 8); ctx.fill();
+  ctx.fillStyle = '#fde68a';
+  ctx.font = 'bold 14px "Courier New", monospace';
+  ctx.fillText('JUMPS', 26, 34);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 22px "Courier New", monospace';
+  ctx.fillText(String(score).padStart(4, '0'), 26, 54);
+  ctx.restore();
+
+  // Lives — hearts
+  ctx.save();
+  const heartX = W - 20;
+  for (let i = 0; i < MAX_LIVES; i++) {
+    const hx = heartX - (MAX_LIVES - i - 1) * 36;
+    ctx.save();
+    ctx.font = '26px serif';
+    ctx.textAlign = 'right';
+    ctx.globalAlpha = i < lives ? 1 : 0.2;
+    ctx.fillText('❤️', hx, 42);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function drawGameOver() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(20,10,40,0.72)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+
+  // Rainbow title
+  const title = 'GAME OVER';
+  const titleX = W / 2;
+  const titleY = H / 2 - 70;
+  ctx.font = 'bold 56px "Courier New", monospace';
+  for (let i = 0; i < title.length; i++) {
+    ctx.fillStyle = RAINBOW[i % RAINBOW.length];
+    const tw = ctx.measureText(title.substring(0, i)).width;
+    const fullW = ctx.measureText(title).width;
+    ctx.fillText(title[i], titleX - fullW / 2 + tw + ctx.measureText(title[i]).width / 2, titleY);
+  }
+
+  ctx.fillStyle = '#c4a8ff';
+  ctx.font = '20px "Courier New", monospace';
+  ctx.fillText('JUMPS CLEARED', W / 2, H / 2 - 20);
+  ctx.fillStyle = '#fde68a';
+  ctx.font = 'bold 42px "Courier New", monospace';
+  ctx.fillText(String(score).padStart(4, '0'), W / 2, H / 2 + 28);
+
+  ctx.fillStyle = '#a78bfa';
+  ctx.font = '18px "Courier New", monospace';
+  ctx.fillText('press SPACE or tap to play again', W / 2, H / 2 + 78);
+
+  ctx.restore();
+}
+
+function hideHint() { hint.style.transition='opacity 0.5s'; hint.style.opacity='0'; }
+function showHint() { hint.style.transition=''; hint.style.opacity='1'; setTimeout(hideHint, 4000); }
+setTimeout(hideHint, 4000);
+
+// ─── Loop ────────────────────────────────────────────────────────────────────
+initGame();
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+loop();
+</script>
+</body>
+</html>
