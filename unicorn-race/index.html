@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Unicorn Race</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0a0018; overflow: hidden; font-family: 'Courier New', monospace; }
+    canvas { display: block; position: fixed; top: 0; left: 0; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W, H;
+function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+resize();
+window.addEventListener('resize', resize);
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+const RACE_DIST   = 5000;
+const N           = 5;
+const PLAYER_I    = 0;
+const BOOST       = 6.5;
+const DECAY       = 0.93;
+const MAX_SPEED   = 22;
+const RAINBOW     = ['#ff2222','#ff8800','#ffdd00','#22cc55','#2299ff','#8844ee','#ee44cc'];
+const MEDAL       = ['🥇','🥈','🥉','4th','5th'];
+const PODIUM_COLS = ['#ffd700','#c0c0c0','#cd7f32'];
+
+const CONFIGS = [
+  { name: 'YOU',     body: '#f0e8ff', horn: '#ff88dd', mane: RAINBOW,                         isPlayer: true  },
+  { name: 'SPARKLE', body: '#ffd0ec', horn: '#ff55cc', mane: ['#ff44aa','#ff99cc','#ffcce8'], isPlayer: false },
+  { name: 'COMET',   body: '#d0e8ff', horn: '#55aaff', mane: ['#2299ff','#55bbff','#aaddff'], isPlayer: false },
+  { name: 'THUNDER', body: '#fff3cc', horn: '#ffaa00', mane: ['#ffaa00','#ffcc44','#ffee99'], isPlayer: false },
+  { name: 'MYSTIC',  body: '#d0ffe8', horn: '#44ee88', mane: ['#44cc88','#88ee44','#bbff99'], isPlayer: false },
+];
+
+// AI tap probabilities (per-frame): tuned to give average speeds 8–10
+const AI_PARAMS = [
+  null, // player
+  { pBase: 0.22, surge: { before: 0.5, prob: 0.30 } }, // SPARKLE: fast start
+  { pBase: 0.16, surge: null },                          // COMET: consistent
+  { pBase: 0.13, surge: { after: 0.6, prob: 0.28 } },   // THUNDER: late burst
+  { pBase: 0.10, burstEvery: 120 },                      // MYSTIC: periodic surges
+];
+
+// ─── State ────────────────────────────────────────────────────────────────────
+let phase, us, frame, finishOrder, postFinishTimer, confetti, tapFlash, bgScroll;
+
+function init() {
+  phase         = 'countdown';
+  frame         = 0;
+  finishOrder   = [];
+  postFinishTimer = 0;
+  confetti      = [];
+  tapFlash      = 0;
+  bgScroll      = 0;
+
+  const laneH = laneHeight();
+  us = CONFIGS.map((cfg, i) => ({
+    ...cfg,
+    idx: i,
+    progress: 0,
+    speed: 0,
+    finished: false,
+    finishRank: null,
+    legFrame: 0,
+    wingFlap: Math.random() * Math.PI * 2,
+    tailWave: Math.random() * Math.PI * 2,
+    burstTimer: 0,
+    laneY: laneTop() + i * laneH + laneH / 2,
+    finishFlash: 0,
+  }));
+}
+
+const laneHeight = () => (H - laneTop()) / N;
+const laneTop    = () => 72;
+const player     = () => us[PLAYER_I];
+const screenX    = (u) => W * 0.32 + (u.progress - player().progress) * 0.38;
+
+// ─── Input ────────────────────────────────────────────────────────────────────
+window.addEventListener('keydown', e => {
+  if (e.code !== 'Space') return;
+  e.preventDefault();
+  if (phase === 'racing') { player().speed = Math.min(player().speed + BOOST, MAX_SPEED); tapFlash = 8; }
+  if (phase === 'podium') init();
+});
+canvas.addEventListener('click', () => {
+  if (phase === 'racing') { player().speed = Math.min(player().speed + BOOST, MAX_SPEED); tapFlash = 8; }
+  if (phase === 'podium') init();
+});
+
+// ─── Update ──────────────────────────────────────────────────────────────────
+function update() {
+  frame++;
+
+  if (phase === 'countdown') {
+    if (frame >= 210) { phase = 'racing'; frame = 0; }
+    return;
+  }
+
+  if (phase === 'podium') {
+    confetti.forEach(c => {
+      c.x += c.vx; c.y += c.vy; c.vy += 0.18; c.rot += c.rv;
+      if (c.y > H + 20) { c.y = -20; c.x = Math.random() * W; c.vy = 1 + Math.random() * 2; }
+    });
+    return;
+  }
+
+  // ── Racing ──
+  bgScroll += player().speed * 0.9;
+  if (tapFlash > 0) tapFlash--;
+
+  us.forEach((u, i) => {
+    if (u.finished) { u.wingFlap += 0.08; u.tailWave += 0.06; return; }
+    u.speed *= DECAY;
+
+    if (!u.isPlayer) aiTick(u, i);
+
+    u.speed = Math.min(u.speed, MAX_SPEED);
+    u.progress += u.speed;
+    u.legFrame  += u.speed * 0.06;
+    u.wingFlap  += 0.10 + u.speed * 0.012;
+    u.tailWave  += 0.09;
+    if (u.finishFlash > 0) u.finishFlash--;
+
+    if (u.progress >= RACE_DIST && !u.finished) {
+      u.progress = RACE_DIST;
+      u.finished = true;
+      u.finishRank = finishOrder.length + 1;
+      u.finishFlash = 60;
+      finishOrder.push(i);
+    }
+  });
+
+  // All done? or 300 frames after first finish → podium
+  if (finishOrder.length > 0) postFinishTimer++;
+  if (finishOrder.length === N || postFinishTimer > 300) {
+    // Assign remaining ranks
+    us.filter(u => !u.finished).forEach((u, j) => {
+      u.finished = true; u.finishRank = finishOrder.length + 1 + j;
+    });
+    phase = 'podium';
+    spawnConfetti();
+  }
+}
+
+function aiTick(u, i) {
+  const p = AI_PARAMS[i];
+  const frac = u.progress / RACE_DIST;
+  let prob = p.pBase;
+
+  if (p.surge) {
+    if (p.surge.before && frac < p.surge.before) prob = p.surge.prob;
+    if (p.surge.after  && frac > p.surge.after)  prob = p.surge.prob;
+  }
+  if (p.burstEvery) {
+    u.burstTimer++;
+    if (u.burstTimer % p.burstEvery < 40) prob = 0.35;
+  }
+
+  if (Math.random() < prob) u.speed = Math.min(u.speed + BOOST * 0.9, MAX_SPEED);
+}
+
+function spawnConfetti() {
+  for (let i = 0; i < 200; i++) {
+    confetti.push({
+      x: Math.random() * W, y: -20 - Math.random() * H * 0.6,
+      vx: (Math.random() - 0.5) * 4, vy: 1 + Math.random() * 3,
+      w: 7 + Math.random() * 9, h: 4 + Math.random() * 5,
+      rot: Math.random() * Math.PI * 2, rv: (Math.random() - 0.5) * 0.25,
+      color: RAINBOW[Math.floor(Math.random() * RAINBOW.length)],
+    });
+  }
+}
+
+// ─── Draw ─────────────────────────────────────────────────────────────────────
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  if (phase === 'countdown' || phase === 'racing') {
+    drawTrackScene();
+    drawHUD();
+    if (phase === 'countdown') drawCountdown();
+  } else {
+    drawPodiumScene();
+  }
+}
+
+// ─── Track Scene ──────────────────────────────────────────────────────────────
+function drawTrackScene() {
+  const lh = laneHeight();
+  const lt = laneTop();
+
+  // Lane backgrounds
+  us.forEach((u, i) => {
+    const ly = lt + i * lh;
+    const isP = i === PLAYER_I;
+
+    // Base grass
+    ctx.fillStyle = isP ? '#2d6a1a' : (i % 2 === 0 ? '#256016' : '#1e5012');
+    ctx.fillRect(0, ly, W, lh);
+
+    // Dirt track strip (center 55% of lane)
+    const trackY  = ly + lh * 0.22;
+    const trackH  = lh * 0.56;
+    ctx.fillStyle = isP ? '#b08040' : '#9a7035';
+    ctx.fillRect(0, trackY, W, trackH);
+
+    // Scrolling dash markings on each lane (scroll at that unicorn's speed for feel)
+    const scroll = phase === 'racing' ? bgScroll : 0;
+    const dashW = 40, gap = 40, period = dashW + gap;
+    const offset = scroll % period;
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    for (let dx = -period + offset; dx < W + period; dx += period) {
+      ctx.fillRect(dx, trackY + trackH / 2 - 2, dashW, 3);
+    }
+
+    // Lane top & bottom borders
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillRect(0, ly, W, 2);
+
+    // Player lane glow border
+    if (isP) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(200,160,255,0.6)';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(1, ly + 1, W - 2, lh - 2);
+      ctx.restore();
+    }
+
+    // Name tag on left
+    const tagW = 82, tagH = 24;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.beginPath(); ctx.roundRect(6, ly + lh / 2 - tagH / 2, tagW, tagH, 5); ctx.fill();
+    ctx.fillStyle = isP ? '#d4aaff' : '#fff';
+    ctx.font = `bold ${Math.min(13, lh * 0.22)}px "Courier New",monospace`;
+    ctx.textAlign = 'left';
+    ctx.fillText(u.name, 12, ly + lh / 2 + 5);
+  });
+
+  // Bottom border
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillRect(0, lt + N * lh, W, 2);
+
+  // ── Finish line ──
+  const finX = screenX({ progress: RACE_DIST });
+  if (finX > -30 && finX < W + 30) {
+    const sqH = 14;
+    for (let fy = lt; fy < lt + N * lh; fy += sqH) {
+      for (let col = 0; col < 2; col++) {
+        ctx.fillStyle = ((Math.floor(fy / sqH) + col) % 2 === 0) ? '#fff' : '#111';
+        ctx.fillRect(finX + col * sqH - sqH, fy, sqH, sqH);
+      }
+    }
+    // Rainbow banner above
+    RAINBOW.forEach((col, ci) => {
+      ctx.fillStyle = col;
+      ctx.fillRect(finX - sqH + ci * 8 - 28, lt - 18, 8, 20);
+    });
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 13px "Courier New",monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('FINISH', finX, lt - 22);
+  }
+
+  // ── Unicorns ──
+  us.forEach((u, i) => {
+    const lh2 = laneHeight();
+    const ly   = laneTop() + i * lh2;
+    const ux   = screenX(u);
+    const uy   = ly + lh2 / 2;
+    const sc   = Math.min(1, lh2 / 90);
+    drawUnicorn(u, ux, uy, sc);
+
+    // Finish flash
+    if (u.finishFlash > 0) {
+      ctx.save();
+      ctx.globalAlpha = u.finishFlash / 60 * 0.5;
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, ly, W, lh2);
+      ctx.restore();
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#ffd700';
+      ctx.font = `bold ${lh2 * 0.45}px "Courier New",monospace`;
+      ctx.globalAlpha = Math.min(1, u.finishFlash / 30);
+      ctx.fillText(MEDAL[u.finishRank - 1], W / 2, ly + lh2 * 0.75);
+      ctx.restore();
+    }
+  });
+
+  // ── Rank badges (right side) ──
+  if (phase === 'racing') {
+    const sorted = [...us].sort((a, b) => b.progress - a.progress);
+    us.forEach((u, i) => {
+      const rank = sorted.findIndex(s => s.idx === i) + 1;
+      const lh2  = laneHeight();
+      const ly   = laneTop() + i * lh2;
+      const bx   = W - 46, by = ly + lh2 / 2 - 13, bw = 40, bh = 26;
+      const rankColors = ['#ffd700','#c0c0c0','#cd7f32','#88aacc','#889988'];
+      ctx.fillStyle = rankColors[rank - 1];
+      ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 6); ctx.fill();
+      ctx.fillStyle = '#000';
+      ctx.font = `bold 13px "Courier New",monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(ordinal(rank), bx + bw / 2, by + 17);
+    });
+  }
+}
+
+function ordinal(n) {
+  return ['1st','2nd','3rd','4th','5th'][n-1] || n+'th';
+}
+
+// ─── HUD ─────────────────────────────────────────────────────────────────────
+function drawHUD() {
+  // Dark bar
+  ctx.fillStyle = 'rgba(10,0,24,0.88)';
+  ctx.fillRect(0, 0, W, laneTop());
+
+  // Title
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#d4aaff';
+  ctx.font = 'bold 16px "Courier New",monospace';
+  ctx.fillText('UNICORN RACE', W / 2, 20);
+
+  // ── Progress minimap ──
+  const mapX = 80, mapY = 28, mapW = W - 160, mapH = 20;
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  ctx.beginPath(); ctx.roundRect(mapX, mapY, mapW, mapH, 4); ctx.fill();
+
+  // Finish line marker
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillRect(mapX + mapW - 3, mapY, 3, mapH);
+
+  // Unicorn dots on minimap
+  us.forEach(u => {
+    const dotX = mapX + (u.progress / RACE_DIST) * mapW;
+    ctx.fillStyle = u.mane[0];
+    ctx.beginPath(); ctx.arc(dotX, mapY + mapH / 2, 5, 0, Math.PI * 2); ctx.fill();
+    if (u.isPlayer) {
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(dotX, mapY + mapH / 2, 7, 0, Math.PI * 2); ctx.stroke();
+    }
+  });
+
+  // Tap speed bar (player)
+  const barX = 8, barY = 28, barW = 66, barH = 20;
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  ctx.beginPath(); ctx.roundRect(barX, barY, barW, barH, 4); ctx.fill();
+  const spd = player().speed / MAX_SPEED;
+  const barCol = spd > 0.7 ? '#ff4444' : spd > 0.4 ? '#ffdd00' : '#44ff88';
+  ctx.fillStyle = barCol;
+  ctx.beginPath(); ctx.roundRect(barX, barY, barW * spd, barH, 4); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.font = 'bold 11px "Courier New",monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('SPEED', barX + barW / 2, barY + 13);
+
+  // Tap prompt
+  ctx.textAlign = 'left';
+  const tapAlpha = tapFlash > 0 ? 1 : 0.5 + 0.5 * Math.sin(frame * 0.1);
+  ctx.save();
+  ctx.globalAlpha = tapAlpha;
+  ctx.fillStyle = tapFlash > 0 ? '#aaff88' : '#fff';
+  ctx.font = `bold 11px "Courier New",monospace`;
+  ctx.fillText('SPACE', barX, barY - 3);
+  ctx.restore();
+}
+
+// ─── Countdown ────────────────────────────────────────────────────────────────
+function drawCountdown() {
+  const beat = Math.floor(frame / 52); // 0=3, 1=2, 2=1, 3=GO!
+  const sub  = frame % 52;
+  const scale = 1 + Math.max(0, (20 - sub) / 20) * 0.5;
+  const alpha = sub < 45 ? 1 : 1 - (sub - 45) / 7;
+  const label = ['3','2','1','GO!'][Math.min(beat, 3)];
+  const col   = ['#ff4444','#ffaa00','#ffdd00','#44ff88'][Math.min(beat, 3)];
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.globalAlpha = alpha;
+  ctx.font = `bold ${Math.floor(120 * scale)}px "Courier New",monospace`;
+  ctx.fillStyle = col;
+  ctx.shadowColor = col;
+  ctx.shadowBlur = 30;
+  ctx.fillText(label, W / 2, H / 2 + 30);
+  ctx.restore();
+}
+
+// ─── Unicorn drawing ─────────────────────────────────────────────────────────
+function drawUnicorn(u, cx, cy, sc) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(sc, sc);
+
+  const leg  = Math.sin(u.legFrame);
+  const wing = Math.sin(u.wingFlap);
+  const tail = Math.sin(u.tailWave);
+  const airborne = false; // always running on track
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.beginPath(); ctx.ellipse(0, 28, 28, 7, 0, 0, Math.PI * 2); ctx.fill();
+
+  // Tail
+  u.mane.forEach((col, t) => {
+    const r = 4.5 - t * 0.4;
+    ctx.strokeStyle = col; ctx.lineWidth = r * 2; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-30, 2 + t);
+    ctx.quadraticCurveTo(-44 + tail * (5 + t * 2), 12 + t * 2, -34 + tail * 3, 26 + t * 2);
+    ctx.stroke();
+  });
+
+  // Wings
+  const ws = 0.45 + wing * 0.35;
+  ctx.fillStyle = 'rgba(255,255,255,0.88)';
+  ctx.beginPath();
+  ctx.moveTo(-4, -6);
+  ctx.bezierCurveTo(-8, -24 - ws * 20, 18, -26 - ws * 24, 24, -8);
+  ctx.bezierCurveTo(14, -12, 0, -8, -4, -6);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(200,210,255,0.55)'; ctx.lineWidth = 1.5;
+  [0,0.33,0.66,1].forEach(t => {
+    const wx = -4 + t * 28, wy = -6 - t;
+    ctx.beginPath(); ctx.moveTo(wx, wy); ctx.lineTo(wx - t * 10, wy - ws * (12 + t * 12)); ctx.stroke();
+  });
+
+  // Body
+  ctx.fillStyle = u.body;
+  ctx.beginPath(); ctx.ellipse(0, 2, 30, 17, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,0.07)';
+  ctx.beginPath(); ctx.ellipse(0, 8, 26, 10, 0, 0, Math.PI * 2); ctx.fill();
+
+  // Legs
+  ctx.strokeStyle = u.body; ctx.lineWidth = 7; ctx.lineCap = 'round';
+  [[-14, 12, -16 + leg * 7, 28],[-5, 14, -6 - leg * 7, 28],[6, 14, 8 + leg * 7, 28],[15, 12, 16 - leg * 7, 28]]
+    .forEach(([x1,y1,x2,y2]) => { ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); });
+  // Hooves
+  ctx.fillStyle = '#9988aa';
+  [[-16+leg*7,28],[-6-leg*7,28],[8+leg*7,28],[16-leg*7,28]]
+    .forEach(([hx,hy]) => { ctx.beginPath(); ctx.ellipse(hx, hy, 5, 3, 0, 0, Math.PI*2); ctx.fill(); });
+
+  // Neck
+  ctx.fillStyle = u.body;
+  ctx.beginPath(); ctx.moveTo(16,-4); ctx.bezierCurveTo(22,-14,28,-18,32,-13); ctx.bezierCurveTo(28,-5,22,-1,16,4); ctx.fill();
+
+  // Head
+  ctx.fillStyle = u.body;
+  ctx.beginPath(); ctx.ellipse(36,-15, 14, 10, -0.25, 0, Math.PI*2); ctx.fill();
+  // Muzzle
+  ctx.fillStyle = `color-mix(in srgb, ${u.body} 70%, #ddd)`;
+  ctx.beginPath(); ctx.ellipse(47,-11, 8, 6, 0.2, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#b090c8';
+  ctx.beginPath(); ctx.ellipse(50,-10, 2, 1.5, 0.3, 0, Math.PI*2); ctx.fill();
+
+  // Eye
+  ctx.fillStyle = '#1a0a2e';
+  ctx.beginPath(); ctx.arc(32,-18, 4, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(33,-19, 1.5, 0, Math.PI*2); ctx.fill();
+
+  // Mane
+  u.mane.forEach((col, m) => {
+    ctx.strokeStyle = col; ctx.lineWidth = 3.5; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(26 - m * 1.2, -20 + m);
+    ctx.quadraticCurveTo(20 - m * 1.5 + tail * (2 + m * 0.5), -26 + m, 17 - m + tail * 1.5, -14 + m * 1.5);
+    ctx.stroke();
+  });
+
+  // Horn
+  ['#ffaadd','#ff66cc','#ee00aa'].forEach((hc, hi) => {
+    ctx.strokeStyle = hc; ctx.lineWidth = 4 - hi * 1.2; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(28 + hi, -24); ctx.lineTo(34 - hi, -44); ctx.stroke();
+  });
+  ctx.strokeStyle = 'rgba(255,255,255,0.65)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(29, -26); ctx.lineTo(32, -42); ctx.stroke();
+
+  ctx.restore();
+}
+
+// ─── Podium Scene ─────────────────────────────────────────────────────────────
+function drawPodiumScene() {
+  // Background
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#0a001e'); bg.addColorStop(1, '#1a0838');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+
+  // Stars
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  for (let s = 0; s < 80; s++) {
+    const sx = (s * 137 + 50) % W;
+    const sy = (s * 97 + 30) % (H * 0.55);
+    const sr = 0.5 + (s % 3) * 0.5;
+    ctx.beginPath(); ctx.arc(sx, sy, sr, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // Title
+  ctx.textAlign = 'center';
+  ctx.font = `bold ${Math.floor(W / 18)}px "Courier New",monospace`;
+  RAINBOW.forEach((col, ci) => {
+    const title = 'RACE OVER!';
+    ctx.fillStyle = RAINBOW[ci % RAINBOW.length];
+    const charW = ctx.measureText(title).width / title.length;
+    const startX = W / 2 - ctx.measureText(title).width / 2;
+    ctx.fillText(title[ci] || '', startX + ci * charW + charW / 2, 60);
+  });
+  ctx.fillStyle = '#c8aaff';
+  ctx.font = `bold ${Math.floor(W / 18)}px "Courier New",monospace`;
+  ctx.fillText('RACE OVER!', W / 2, 60);
+
+  // Sort results
+  const sorted = [...us].sort((a, b) => (a.finishRank || 99) - (b.finishRank || 99));
+
+  // Podium blocks
+  const podW   = Math.min(130, W / 6);
+  const podGap = podW * 0.15;
+  const baseY  = H * 0.88;
+  const heights = [H * 0.28, H * 0.20, H * 0.14]; // 1st, 2nd, 3rd
+  const positions = [1, 0, 2]; // screen order: 2nd left, 1st center, 3rd right
+  const centerX = W / 2;
+
+  // Draw podium steps (back to front: 3rd, 2nd, 1st)
+  [2, 1, 0].forEach(rank => {
+    const screenPos = positions[rank];
+    const px = centerX + (screenPos - 1) * (podW + podGap);
+    const ph = heights[rank];
+    const py = baseY - ph;
+
+    // Block
+    ctx.fillStyle = PODIUM_COLS[rank];
+    ctx.beginPath(); ctx.roundRect(px - podW / 2, py, podW, ph, [8, 8, 0, 0]); ctx.fill();
+    // Shine strip
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.beginPath(); ctx.roundRect(px - podW / 2 + 6, py + 6, 10, ph - 12, 4); ctx.fill();
+    // Rank number
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.font = `bold ${podW * 0.35}px "Courier New",monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText(rank + 1, px, baseY - 12);
+
+    // Unicorn on podium (if top 3 finished)
+    if (sorted[rank]) {
+      const pu = sorted[rank];
+      const ux = px;
+      const uy = py - 35;
+      const sc = Math.min(0.85, podW / 95);
+      drawUnicorn(pu, ux, uy, sc);
+
+      // Name + medal
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold 13px "Courier New",monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(pu.name, px, py - 78 * sc - 8);
+
+      if (rank === 0) {
+        // Sparkle crown
+        for (let sp = 0; sp < 6; sp++) {
+          const sa = (frame * 0.04 + sp * Math.PI / 3);
+          const sr = 30 + Math.sin(frame * 0.06 + sp) * 8;
+          const sCol = RAINBOW[sp % RAINBOW.length];
+          ctx.fillStyle = sCol;
+          ctx.beginPath();
+          ctx.arc(px + Math.cos(sa) * sr, py - 80 * sc + Math.sin(sa) * sr * 0.4, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+  });
+
+  // Full results list on right
+  const listX = Math.min(W - 180, centerX + (podW + podGap) * 2.2);
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.beginPath(); ctx.roundRect(listX, H * 0.3, 160, N * 36 + 20, 10); ctx.fill();
+  ctx.fillStyle = '#c8aaff';
+  ctx.font = 'bold 13px "Courier New",monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('RESULTS', listX + 10, H * 0.3 + 18);
+  sorted.forEach((u, ri) => {
+    const ry = H * 0.3 + 36 + ri * 34;
+    ctx.fillStyle = u.isPlayer ? '#d4aaff' : '#aaa';
+    ctx.font = `bold 13px "Courier New",monospace`;
+    ctx.fillText(`${MEDAL[ri]}  ${u.name}`, listX + 10, ry + 16);
+    if (u.isPlayer) {
+      ctx.fillStyle = 'rgba(200,160,255,0.15)';
+      ctx.beginPath(); ctx.roundRect(listX + 2, ry + 2, 156, 24, 5); ctx.fill();
+    }
+  });
+
+  // "Play again" prompt
+  const pa = 0.6 + 0.4 * Math.sin(frame * 0.07);
+  ctx.save(); ctx.globalAlpha = pa;
+  ctx.fillStyle = '#fff';
+  ctx.font = '15px "Courier New",monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('SPACE or tap to race again', W / 2, H - 20);
+  ctx.restore();
+
+  // Confetti
+  confetti.forEach(c => {
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(c.rot);
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = c.color;
+    ctx.fillRect(-c.w / 2, -c.h / 2, c.w, c.h);
+    ctx.restore();
+  });
+}
+
+// ─── Loop ────────────────────────────────────────────────────────────────────
+init();
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+loop();
+</script>
+</body>
+</html>

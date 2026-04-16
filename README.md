@@ -12,3 +12,4 @@ A few experimental projects.
 * [rainbow-organ](https://experiments.andrewmcdonough.com/rainbow-organ/): A kids' rainbow musical instrument — play chromatic notes with your keyboard, summon unicorns, hearts and stars
 * [golf-shooter](https://experiments.andrewmcdonough.com/golf-shooter/): A Fortnite-inspired golf course shooter — blast golfers with arrow keys and X, watch the robot claw carry them off
 * [unicorn-jump](https://experiments.andrewmcdonough.com/unicorn-jump/): Endless racetrack jumper — press space to leap your winged unicorn over rainbow hurdles
+* [unicorn-race](https://experiments.andrewmcdonough.com/unicorn-race/): Race 4 rival unicorns — hammer space to go faster, top 3 get the podium with streamers
