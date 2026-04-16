@@ -43,10 +43,10 @@ const CONFIGS = [
 // AI tap probabilities (per-frame): tuned to give average speeds 8–10
 const AI_PARAMS = [
   null, // player
-  { pBase: 0.22, surge: { before: 0.5, prob: 0.30 } }, // SPARKLE: fast start
-  { pBase: 0.16, surge: null },                          // COMET: consistent
-  { pBase: 0.13, surge: { after: 0.6, prob: 0.28 } },   // THUNDER: late burst
-  { pBase: 0.10, burstEvery: 120 },                      // MYSTIC: periodic surges
+  { pBase: 0.06, surge: { before: 0.5, prob: 0.08 } }, // SPARKLE: fast start
+  { pBase: 0.05, surge: null },                          // COMET: consistent
+  { pBase: 0.04, surge: { after: 0.6, prob: 0.07 } },   // THUNDER: late burst
+  { pBase: 0.03, burstEvery: 120 },                      // MYSTIC: periodic surges
 ];
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -215,9 +215,9 @@ function drawTrackScene() {
     // Scrolling dash markings on each lane (scroll at that unicorn's speed for feel)
     const scroll = phase === 'racing' ? bgScroll : 0;
     const dashW = 40, gap = 40, period = dashW + gap;
-    const offset = scroll % period;
+    const offset = ((scroll % period) + period) % period; // scrolls left as progress increases
     ctx.fillStyle = 'rgba(255,255,255,0.25)';
-    for (let dx = -period + offset; dx < W + period; dx += period) {
+    for (let dx = -dashW + (period - offset); dx < W + period; dx += period) {
       ctx.fillRect(dx, trackY + trackH / 2 - 2, dashW, 3);
     }
 
