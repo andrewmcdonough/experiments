@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BBC BASIC</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #2a2a2a;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Courier New', monospace;
+      padding: 30px 20px;
+    }
+
+    #bezel {
+      background: linear-gradient(160deg, #ddd3b0 0%, #c8bc98 60%, #b8aa88 100%);
+      border-radius: 14px 14px 10px 10px;
+      padding: 22px 28px 20px;
+      width: 700px;
+      box-shadow:
+        0 10px 40px rgba(0,0,0,0.7),
+        inset 0 1px 0 rgba(255,255,255,0.35),
+        inset 0 -3px 6px rgba(0,0,0,0.25),
+        inset 2px 0 4px rgba(0,0,0,0.1),
+        inset -2px 0 4px rgba(0,0,0,0.1);
+    }
+
+    #brand {
+      font-size: 10px;
+      font-weight: bold;
+      letter-spacing: 4px;
+      color: #7a6a48;
+      text-align: center;
+      margin-bottom: 14px;
+      text-transform: uppercase;
+      text-shadow: 0 1px 0 rgba(255,255,255,0.4);
+    }
+
+    #monitor-housing {
+      background: #111;
+      border-radius: 10px;
+      padding: 10px;
+      box-shadow:
+        inset 0 4px 16px rgba(0,0,0,0.9),
+        inset 0 0 6px rgba(0,0,0,0.6),
+        0 2px 4px rgba(0,0,0,0.5);
+      margin-bottom: 18px;
+    }
+
+    #screen {
+      position: relative;
+      background: #000;
+      width: 100%;
+      height: 340px;
+      border-radius: 6px;
+      overflow: hidden;
+      padding: 14px 16px 8px;
+      box-shadow:
+        inset 0 0 60px rgba(0,0,0,0.6),
+        inset 0 0 10px rgba(0, 255, 80, 0.04);
+      cursor: text;
+    }
+
+    #scanlines {
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(
+        to bottom,
+        transparent 0px,
+        transparent 3px,
+        rgba(0, 0, 0, 0.15) 3px,
+        rgba(0, 0, 0, 0.15) 4px
+      );
+      pointer-events: none;
+      z-index: 10;
+      border-radius: 6px;
+    }
+
+    #screen-glow {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(
+        ellipse 80% 60% at 50% 40%,
+        rgba(0, 255, 80, 0.05) 0%,
+        transparent 70%
+      );
+      pointer-events: none;
+      z-index: 9;
+    }
+
+    #screen-vignette {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(
+        ellipse 90% 85% at 50% 50%,
+        transparent 60%,
+        rgba(0,0,0,0.5) 100%
+      );
+      pointer-events: none;
+      z-index: 11;
+      border-radius: 6px;
+    }
+
+    #output {
+      color: #33ff66;
+      font-size: 14px;
+      line-height: 1.55;
+      font-family: 'Courier New', monospace;
+      white-space: pre;
+      word-break: break-all;
+      text-shadow: 0 0 7px rgba(51, 255, 102, 0.65);
+      position: relative;
+      z-index: 1;
+    }
+
+    #input-line {
+      color: #33ff66;
+      font-size: 14px;
+      line-height: 1.55;
+      font-family: 'Courier New', monospace;
+      white-space: pre;
+      text-shadow: 0 0 7px rgba(51, 255, 102, 0.65);
+      position: relative;
+      z-index: 1;
+      min-height: 1.55em;
+    }
+
+    #cursor {
+      display: inline-block;
+      width: 9px;
+      height: 14px;
+      background: #33ff66;
+      vertical-align: text-bottom;
+      box-shadow: 0 0 8px rgba(51, 255, 102, 0.9);
+      animation: blink 0.75s step-end infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0; }
+    }
+
+    /* ── Keyboard ── */
+
+    #keyboard {
+      background: linear-gradient(to bottom, #bfb38a, #ada07a);
+      border-radius: 6px;
+      padding: 10px 8px 12px;
+      box-shadow:
+        inset 0 2px 5px rgba(0,0,0,0.25),
+        inset 0 -1px 2px rgba(255,255,255,0.15);
+    }
+
+    .key-row {
+      display: flex;
+      gap: 3px;
+      margin-bottom: 3px;
+      justify-content: center;
+    }
+    .key-row:last-child { margin-bottom: 0; }
+
+    .key {
+      background: linear-gradient(to bottom, #ede3c2 0%, #d8ce9e 100%);
+      border: 1px solid #9a8860;
+      border-bottom: 3px solid #7a6840;
+      border-radius: 3px;
+      min-width: 30px;
+      height: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 7px;
+      font-family: 'Courier New', monospace;
+      color: #2a1a08;
+      font-weight: bold;
+      letter-spacing: 0.3px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+      flex-shrink: 0;
+      user-select: none;
+    }
+
+    .key.fn {
+      background: linear-gradient(to bottom, #d8cca8 0%, #c4b888 100%);
+      font-size: 6px;
+      min-width: 26px;
+    }
+
+    .key.wide    { min-width: 46px; }
+    .key.wider   { min-width: 64px; }
+    .key.widest  { min-width: 80px; }
+    .key.space   { min-width: 200px; }
+
+    .key.red {
+      background: linear-gradient(to bottom, #d44040, #aa2020);
+      color: #fff;
+      border-color: #882020;
+      border-bottom-color: #660000;
+    }
+
+    #real-input {
+      position: fixed;
+      opacity: 0;
+      pointer-events: none;
+      top: -100px;
+      left: -100px;
+      width: 1px;
+      height: 1px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="bezel">
+  <div id="brand">BBC Micro</div>
+  <div id="monitor-housing">
+    <div id="screen">
+      <div id="scanlines"></div>
+      <div id="screen-glow"></div>
+      <div id="screen-vignette"></div>
+      <div id="output"></div>
+      <div id="input-line"><span id="input-display"></span><span id="cursor"></span></div>
+    </div>
+  </div>
+  <div id="keyboard"></div>
+</div>
+
+<input id="real-input" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+
+<script>
+'use strict';
+
+// ─── Screen ──────────────────────────────────────────────────────────────────
+
+const SCREEN_ROWS = 19;
+let screenLines = [];
+
+const outputEl      = document.getElementById('output');
+const inputLineEl   = document.getElementById('input-line');
+const inputDisplayEl= document.getElementById('input-display');
+
+function screenPrint(text) {
+  const parts = String(text).split('\n');
+  for (const part of parts) {
+    screenLines.push(part);
+  }
+  while (screenLines.length > SCREEN_ROWS) screenLines.shift();
+  renderScreen();
+}
+
+function screenAppend(text) {
+  // Append to the last line without a newline
+  if (screenLines.length === 0) screenLines.push('');
+  screenLines[screenLines.length - 1] += String(text);
+  renderScreen();
+}
+
+function screenClear() {
+  screenLines = [];
+  renderScreen();
+}
+
+function renderScreen() {
+  outputEl.textContent = screenLines.join('\n');
+}
+
+// ─── Input / Output Loop ─────────────────────────────────────────────────────
+
+let inputBuffer = '';
+let waitingForInput = false;
+let inputPrompt = '>';
+let inputResolve = null;
+
+const realInput = document.getElementById('real-input');
+
+function keepFocused() { realInput.focus(); }
+document.addEventListener('click', keepFocused);
+document.addEventListener('keydown', keepFocused);
+
+realInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const line = inputBuffer;
+    inputBuffer = '';
+    updateInputDisplay();
+    if (waitingForInput) {
+      screenPrint(inputPrompt + line);
+      inputResolve(line);
+    } else {
+      screenPrint('>' + line);
+      handleLine(line.trim());
+    }
+  } else if (e.key === 'Backspace') {
+    e.preventDefault();
+    inputBuffer = inputBuffer.slice(0, -1);
+    updateInputDisplay();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    running = false;
+    screenPrint('^C');
+    updateInputDisplay();
+  }
+});
+
+realInput.addEventListener('input', () => {
+  const val = realInput.value;
+  realInput.value = '';
+  if (val) {
+    inputBuffer += val;
+    updateInputDisplay();
+  }
+});
+
+function updateInputDisplay() {
+  if (waitingForInput) {
+    inputDisplayEl.textContent = inputPrompt + inputBuffer;
+  } else {
+    inputDisplayEl.textContent = '>' + inputBuffer;
+  }
+}
+
+async function waitForUserInput(prompt) {
+  inputPrompt = prompt;
+  waitingForInput = true;
+  updateInputDisplay();
+  return new Promise(resolve => { inputResolve = resolve; })
+    .then(val => {
+      waitingForInput = false;
+      inputResolve = null;
+      inputPrompt = '>';
+      updateInputDisplay();
+      return val;
+    });
+}
+
+function handleLine(line) {
+  if (!line) return;
+  const lineNumMatch = line.match(/^(\d+)\s*(.*)/);
+  if (lineNumMatch) {
+    const num = parseInt(lineNumMatch[1], 10);
+    const stmt = lineNumMatch[2].trim();
+    if (stmt === '') {
+      delete program[num];
+    } else {
+      program[num] = stmt;
+    }
+  } else {
+    executeStatementAsync(line, true);
+  }
+}
+
+async function executeStatementAsync(stmt, directMode) {
+  try {
+    await executeStatement(stmt, directMode);
+  } catch(e) {
+    screenPrint('?Error: ' + e.message);
+  }
+  updateInputDisplay();
+}
+
+// ─── Program Store ────────────────────────────────────────────────────────────
+
+let program = {};
+
+function getSortedLineNumbers() {
+  return Object.keys(program).map(Number).sort((a, b) => a - b);
+}
+
+function programNew() {
+  program = {};
+  vars = {};
+}
+
+function programList() {
+  const lines = getSortedLineNumbers();
+  if (lines.length === 0) {
+    screenPrint('(empty)');
+    return;
+  }
+  for (const n of lines) {
+    screenPrint(n + ' ' + program[n]);
+  }
+}
+
+// ─── Tokenizer ────────────────────────────────────────────────────────────────
+
+const T = {
+  NUM:'NUM', STR:'STR', IDENT:'IDENT',
+  OP:'OP', COMMA:'COMMA', SEMI:'SEMI',
+  LPAREN:'LPAREN', RPAREN:'RPAREN',
+  KEYWORD:'KEYWORD', EOF:'EOF',
+};
+
+const KEYWORDS = new Set([
+  'PRINT','LET','GOTO','FOR','NEXT','REM','INPUT',
+  'IF','THEN','ELSE','TO','STEP','AND','OR','NOT',
+  'RUN','LIST','NEW','INT','ABS','SQR','RND','CLS','END',
+]);
+
+function tokenize(src) {
+  const tokens = [];
+  let i = 0;
+  while (i < src.length) {
+    if (src[i] === ' ' || src[i] === '\t') { i++; continue; }
+
+    // String literal
+    if (src[i] === '"') {
+      let j = i + 1;
+      while (j < src.length && src[j] !== '"') j++;
+      tokens.push({ type: T.STR, value: src.slice(i + 1, j) });
+      i = j + 1;
+      continue;
+    }
+
+    // Number
+    if (/[0-9]/.test(src[i]) || (src[i] === '.' && /[0-9]/.test(src[i+1]||''))) {
+      let j = i;
+      while (j < src.length && /[0-9.]/.test(src[j])) j++;
+      tokens.push({ type: T.NUM, value: parseFloat(src.slice(i, j)) });
+      i = j;
+      continue;
+    }
+
+    // Identifier / keyword
+    if (/[A-Za-z_]/.test(src[i])) {
+      let j = i;
+      while (j < src.length && /[A-Za-z0-9_$%]/.test(src[j])) j++;
+      const word = src.slice(i, j).toUpperCase();
+      tokens.push({ type: KEYWORDS.has(word) ? T.KEYWORD : T.IDENT, value: word });
+      i = j;
+      continue;
+    }
+
+    // Multi-char operators
+    const two = src.slice(i, i + 2);
+    if (['<=','>=','<>'].includes(two)) {
+      tokens.push({ type: T.OP, value: two });
+      i += 2;
+      continue;
+    }
+
+    // Single-char operators and punctuation
+    if ('+-*/^<>=!'.includes(src[i])) { tokens.push({ type: T.OP, value: src[i] }); i++; continue; }
+    if (src[i] === ',') { tokens.push({ type: T.COMMA, value: ',' }); i++; continue; }
+    if (src[i] === ';') { tokens.push({ type: T.SEMI,  value: ';' }); i++; continue; }
+    if (src[i] === '(') { tokens.push({ type: T.LPAREN,value: '(' }); i++; continue; }
+    if (src[i] === ')') { tokens.push({ type: T.RPAREN,value: ')' }); i++; continue; }
+    if (src[i] === ':') { i++; continue; } // statement separator — skip for now
+
+    i++; // unknown char, skip
+  }
+  tokens.push({ type: T.EOF, value: null });
+  return tokens;
+}
+
+// ─── Expression Evaluator ────────────────────────────────────────────────────
+
+let vars = {};
+
+function makeParser(tokens) {
+  let pos = 0;
+  const peek  = ()  => tokens[pos] || { type: T.EOF, value: null };
+  const consume = () => tokens[pos++] || { type: T.EOF, value: null };
+
+  function parseExpr() {
+    let left = parseComparison();
+    while (peek().type === T.KEYWORD && (peek().value === 'AND' || peek().value === 'OR')) {
+      const op = consume().value;
+      const right = parseComparison();
+      left = op === 'AND' ? ((left && right) ? -1 : 0) : ((left || right) ? -1 : 0);
+    }
+    return left;
+  }
+
+  function parseComparison() {
+    let left = parseAdditive();
+    const t = peek();
+    if (t.type === T.OP && ['<','>','<=','>=','=','<>'].includes(t.value)) {
+      const op = consume().value;
+      const right = parseAdditive();
+      switch(op) {
+        case '<':  return left <  right ? -1 : 0;
+        case '>':  return left >  right ? -1 : 0;
+        case '<=': return left <= right ? -1 : 0;
+        case '>=': return left >= right ? -1 : 0;
+        case '=':  return left == right ? -1 : 0; // eslint-disable-line eqeqeq
+        case '<>': return left != right ? -1 : 0; // eslint-disable-line eqeqeq
+      }
+    }
+    return left;
+  }
+
+  function parseAdditive() {
+    let left = parseMultiplicative();
+    while (peek().type === T.OP && (peek().value === '+' || peek().value === '-')) {
+      const op = consume().value;
+      const right = parseMultiplicative();
+      if (op === '+') {
+        left = (typeof left === 'string' || typeof right === 'string')
+          ? String(left) + String(right) : left + right;
+      } else {
+        left = left - right;
+      }
+    }
+    return left;
+  }
+
+  function parseMultiplicative() {
+    let left = parseUnary();
+    while (peek().type === T.OP && (peek().value === '*' || peek().value === '/' || peek().value === '^')) {
+      const op = consume().value;
+      const right = parseUnary();
+      if (op === '*') left = left * right;
+      else if (op === '/') left = left / right;
+      else left = Math.pow(left, right);
+    }
+    return left;
+  }
+
+  function parseUnary() {
+    if (peek().type === T.OP && peek().value === '-') { consume(); return -parsePrimary(); }
+    if (peek().type === T.KEYWORD && peek().value === 'NOT') { consume(); return parsePrimary() ? 0 : -1; }
+    return parsePrimary();
+  }
+
+  function parsePrimary() {
+    const t = peek();
+    if (t.type === T.NUM) { consume(); return t.value; }
+    if (t.type === T.STR) { consume(); return t.value; }
+    if (t.type === T.LPAREN) {
+      consume();
+      const val = parseExpr();
+      if (peek().type === T.RPAREN) consume();
+      return val;
+    }
+    // Built-in functions
+    if (t.type === T.KEYWORD) {
+      if (t.value === 'INT' || t.value === 'ABS' || t.value === 'SQR' || t.value === 'RND') {
+        const fn = consume().value;
+        if (peek().type === T.LPAREN) consume();
+        const arg = parseExpr();
+        if (peek().type === T.RPAREN) consume();
+        if (fn === 'INT') return Math.floor(arg);
+        if (fn === 'ABS') return Math.abs(arg);
+        if (fn === 'SQR') return Math.sqrt(arg);
+        if (fn === 'RND') return arg === 1 ? Math.random() : Math.floor(Math.random() * arg) + 1;
+      }
+    }
+    if (t.type === T.IDENT) {
+      consume();
+      return vars[t.value] !== undefined ? vars[t.value] : 0;
+    }
+    return 0;
+  }
+
+  return { parseExpr, peek, consume, getPos: () => pos };
+}
+
+// ─── Execution Engine ────────────────────────────────────────────────────────
+
+let running = false;
+let pc = 0;
+let sortedLines = [];
+let forStack = [];
+let jumped = false; // set by jumpTo to suppress pc++
+
+function jumpTo(targetNum) {
+  const idx = sortedLines.indexOf(Number(targetNum));
+  if (idx === -1) throw new Error('Line ' + targetNum + ' not found');
+  pc = idx - 1; // -1 because main loop does pc++ afterward
+}
+
+async function runProgram() {
+  if (running) return;
+  running = true;
+  vars = {};
+  forStack = [];
+  sortedLines = getSortedLineNumbers();
+  pc = 0;
+
+  let stepCount = 0;
+  while (running && pc < sortedLines.length) {
+    const lineNum = sortedLines[pc];
+    const stmt = program[lineNum];
+    try {
+      await executeStatement(stmt, false);
+    } catch(e) {
+      screenPrint('Error in line ' + lineNum + ': ' + e.message);
+      running = false;
+      break;
+    }
+    if (running) pc++;
+    if (++stepCount % 50000 === 0) await sleep(0);
+  }
+
+  running = false;
+  screenPrint('');
+  updateInputDisplay();
+}
+
+async function executeStatement(stmt, directMode) {
+  if (!stmt || !stmt.trim()) return;
+  const tokens = tokenize(stmt);
+  const t0 = tokens[0];
+  if (t0.type === T.EOF) return;
+
+  // REM
+  if (t0.type === T.KEYWORD && t0.value === 'REM') return;
+
+  // CLS
+  if (t0.type === T.KEYWORD && t0.value === 'CLS') { screenClear(); return; }
+
+  // END
+  if (t0.type === T.KEYWORD && t0.value === 'END') { running = false; return; }
+
+  // PRINT
+  if (t0.type === T.KEYWORD && t0.value === 'PRINT') {
+    await execPrint(tokens, 1);
+    return;
+  }
+
+  // LET x = expr
+  if (t0.type === T.KEYWORD && t0.value === 'LET') {
+    execAssign(tokens, 1);
+    return;
+  }
+
+  // x = expr (bare assignment)
+  if (t0.type === T.IDENT && tokens[1] && tokens[1].type === T.OP && tokens[1].value === '=') {
+    execAssign(tokens, 0);
+    return;
+  }
+
+  // GOTO
+  if (t0.type === T.KEYWORD && t0.value === 'GOTO') {
+    if (directMode) { screenPrint('?GOTO not valid in direct mode'); return; }
+    const target = tokens[1] && tokens[1].value;
+    jumpTo(target);
+    return;
+  }
+
+  // FOR
+  if (t0.type === T.KEYWORD && t0.value === 'FOR') {
+    execFor(tokens);
+    return;
+  }
+
+  // NEXT
+  if (t0.type === T.KEYWORD && t0.value === 'NEXT') {
+    execNext(tokens);
+    return;
+  }
+
+  // IF
+  if (t0.type === T.KEYWORD && t0.value === 'IF') {
+    await execIf(tokens, directMode);
+    return;
+  }
+
+  // INPUT
+  if (t0.type === T.KEYWORD && t0.value === 'INPUT') {
+    await execInput(tokens);
+    return;
+  }
+
+  // Direct-mode commands
+  if (t0.type === T.KEYWORD && t0.value === 'RUN') {
+    if (!directMode) return;
+    await runProgram();
+    return;
+  }
+  if (t0.type === T.KEYWORD && t0.value === 'LIST') { programList(); return; }
+  if (t0.type === T.KEYWORD && t0.value === 'NEW')  { programNew(); screenPrint(''); return; }
+
+  screenPrint('?Syntax error');
+}
+
+// ─── Statement Implementations ───────────────────────────────────────────────
+
+async function execPrint(tokens, pos) {
+  let pendingNewline = true;
+
+  while (tokens[pos] && tokens[pos].type !== T.EOF) {
+    const t = tokens[pos];
+
+    if (t.type === T.SEMI) {
+      pendingNewline = false;
+      pos++;
+      continue;
+    }
+    if (t.type === T.COMMA) {
+      // Tab to next 14-char boundary
+      const last = screenLines.length > 0 ? screenLines[screenLines.length - 1] : '';
+      const col = last.length % 14;
+      screenAppend(' '.repeat(col === 0 ? 14 : 14 - col));
+      pos++;
+      pendingNewline = false;
+      continue;
+    }
+
+    pendingNewline = true;
+    const parser = makeParser(tokens.slice(pos));
+    const val = parser.parseExpr();
+    const consumed = parser.getPos();
+    pos += consumed;
+
+    if (pendingNewline) {
+      // Check if next token suppresses newline
+    }
+    screenAppend(val === undefined ? '' : String(val));
+  }
+
+  if (pendingNewline) screenPrint('');
+}
+
+function execAssign(tokens, pos) {
+  const varName = tokens[pos].value;
+  pos += 2; // skip IDENT and '='
+  const parser = makeParser(tokens.slice(pos));
+  vars[varName] = parser.parseExpr();
+}
+
+function execFor(tokens) {
+  // FOR IDENT = expr TO expr [STEP expr]
+  let pos = 1;
+  const varName = tokens[pos++].value;
+  pos++; // skip '='
+  const p1 = makeParser(tokens.slice(pos));
+  const startVal = p1.parseExpr();
+  pos += p1.getPos();
+  pos++; // skip TO
+  const p2 = makeParser(tokens.slice(pos));
+  const toVal = p2.parseExpr();
+  pos += p2.getPos();
+
+  let stepVal = 1;
+  if (tokens[pos] && tokens[pos].type === T.KEYWORD && tokens[pos].value === 'STEP') {
+    pos++;
+    const p3 = makeParser(tokens.slice(pos));
+    stepVal = p3.parseExpr();
+  }
+
+  vars[varName] = startVal;
+  // Remove any existing frame for this variable
+  forStack = forStack.filter(f => f.varName !== varName);
+  forStack.push({ varName, to: toVal, step: stepVal, lineIndex: pc });
+}
+
+function execNext(tokens) {
+  const varName = tokens[1] && tokens[1].type === T.IDENT ? tokens[1].value : null;
+  const frame = varName
+    ? forStack.find(f => f.varName === varName)
+    : forStack[forStack.length - 1];
+
+  if (!frame) throw new Error('NEXT without FOR');
+
+  vars[frame.varName] += frame.step;
+
+  const done = frame.step >= 0
+    ? vars[frame.varName] > frame.to
+    : vars[frame.varName] < frame.to;
+
+  if (done) {
+    forStack.splice(forStack.indexOf(frame), 1);
+  } else {
+    pc = frame.lineIndex; // main loop does pc++, landing on line after FOR
+  }
+}
+
+async function execIf(tokens, directMode) {
+  // IF expr THEN linenum | statement
+  let pos = 1;
+  const parser = makeParser(tokens.slice(pos));
+  const cond = parser.parseExpr();
+  pos += parser.getPos();
+
+  // skip THEN
+  if (tokens[pos] && tokens[pos].value === 'THEN') pos++;
+
+  if (!cond) return;
+
+  // What follows THEN?
+  if (!tokens[pos] || tokens[pos].type === T.EOF) return;
+
+  if (tokens[pos].type === T.NUM) {
+    if (!directMode) jumpTo(tokens[pos].value);
+  } else {
+    const sub = tokens.slice(pos).map(t => t.value).join(' ').replace(/ EOF$/, '').trim();
+    if (sub) await executeStatement(sub, directMode);
+  }
+}
+
+async function execInput(tokens) {
+  // INPUT ["prompt";] VAR
+  let pos = 1;
+  let prompt = '? ';
+
+  if (tokens[pos] && tokens[pos].type === T.STR) {
+    prompt = tokens[pos].value;
+    pos++;
+    if (tokens[pos] && tokens[pos].type === T.SEMI) pos++;
+  }
+
+  const varName = tokens[pos] && tokens[pos].value;
+  if (!varName) throw new Error('Missing variable in INPUT');
+
+  const raw = await waitForUserInput(prompt);
+  const num = parseFloat(raw);
+  vars[varName] = isNaN(num) ? raw : num;
+}
+
+// ─── Keyboard Builder ────────────────────────────────────────────────────────
+
+const KEY_ROWS = [
+  [
+    {l:'f0',c:'fn'},{l:'f1',c:'fn'},{l:'f2',c:'fn'},{l:'f3',c:'fn'},{l:'f4',c:'fn'},
+    {l:'f5',c:'fn'},{l:'f6',c:'fn'},{l:'f7',c:'fn'},{l:'f8',c:'fn'},{l:'f9',c:'fn'},
+    {l:'BREAK',c:'red wide'},
+  ],
+  [
+    {l:'ESC',c:'wide'},{l:'1'},{l:'2'},{l:'3'},{l:'4'},{l:'5'},{l:'6'},
+    {l:'7'},{l:'8'},{l:'9'},{l:'0'},{l:'-'},{l:'='},{l:'~'},{l:'DEL',c:'wide'},
+  ],
+  [
+    {l:'TAB',c:'wide'},{l:'Q'},{l:'W'},{l:'E'},{l:'R'},{l:'T'},{l:'Y'},
+    {l:'U'},{l:'I'},{l:'O'},{l:'P'},{l:'['},{l:']'},{l:'COPY',c:'wide'},{l:'↑'},
+  ],
+  [
+    {l:'CTRL',c:'wide'},{l:'A'},{l:'S'},{l:'D'},{l:'F'},{l:'G'},{l:'H'},
+    {l:'J'},{l:'K'},{l:'L'},{l:';'},{l:':'},{l:'RETURN',c:'widest'},
+  ],
+  [
+    {l:'SHIFT',c:'wider'},{l:'Z'},{l:'X'},{l:'C'},{l:'V'},{l:'B'},{l:'N'},
+    {l:'M'},{l:','},{l:'.'},{l:'/'},{l:'SHIFT',c:'wider'},
+  ],
+  [
+    {l:'CAPS',c:'wide'},{l:'CTRL',c:'wide'},{l:'',c:'space'},
+    {l:'←'},{l:'↓'},{l:'↑'},{l:'→'},
+  ],
+];
+
+function buildKeyboard() {
+  const kb = document.getElementById('keyboard');
+  for (const row of KEY_ROWS) {
+    const rowEl = document.createElement('div');
+    rowEl.className = 'key-row';
+    for (const key of row) {
+      const k = document.createElement('div');
+      k.className = 'key ' + (key.c || '');
+      k.textContent = key.l;
+      rowEl.appendChild(k);
+    }
+    kb.appendChild(rowEl);
+  }
+}
+
+// ─── Boot Sequence ────────────────────────────────────────────────────────────
+
+const BOOT_LINES = [
+  'BBC Computer 32K',
+  '',
+  'Acorn DFS',
+  '',
+  'BASIC',
+  '',
+];
+
+async function bootSequence() {
+  await sleep(200);
+  for (const line of BOOT_LINES) {
+    await sleep(90);
+    screenPrint(line);
+  }
+  updateInputDisplay();
+  keepFocused();
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+
+buildKeyboard();
+keepFocused();
+bootSequence();
+</script>
+</body>
+</html>
