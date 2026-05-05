@@ -14,3 +14,4 @@ A few experimental projects.
 * [unicorn-jump](https://experiments.andrewmcdonough.com/unicorn-jump/): Endless racetrack jumper — press space to leap your winged unicorn over rainbow hurdles
 * [unicorn-race](https://experiments.andrewmcdonough.com/unicorn-race/): Race 4 rival unicorns — hammer space to go faster, top 3 get the podium with streamers
 * [bbc-basic](https://experiments.andrewmcdonough.com/bbc-basic/): A BBC Micro BASIC interpreter in the browser — type and run classic BASIC programs
+* [game-of-life](https://experiments.andrewmcdonough.com/game-of-life/): Conway's Game of Life — paint cells, stamp classic patterns, and watch neon life evolve
