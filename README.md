@@ -4,6 +4,7 @@ A few experimental projects.
 
 * [sequencer](https://experiments.andrewmcdonough.com/sequencer/): A web-based step sequencer
 * [face-art](https://experiments.andrewmcdonough.com/face-art/): Generative art driven by your face movements
+* [flappy-unicorn](https://experiments.andrewmcdonough.com/flappy-unicorn/): A flappy bird clone — flap a flying unicorn through green pipes with a rainbow trail
 * [unicorn-face](https://experiments.andrewmcdonough.com/unicorn-face/): Rainbow unicorn that mirrors your face with magical gesture effects
 * [bubble-draw](https://experiments.andrewmcdonough.com/bubble-draw/): Draw with dots — hover to cycle through rainbow colours
 * [bubble-face](https://experiments.andrewmcdonough.com/bubble-face/): Paint the dot grid with your face

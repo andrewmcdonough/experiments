@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Flappy Unicorn</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: linear-gradient(to bottom, #87CEEB 0%, #E0F7FA 60%, #90EE90 100%);
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      touch-action: none;
+    }
+    canvas { display: block; }
+    #ui {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    #start, #gameover {
+      pointer-events: auto;
+      text-align: center;
+      color: #fff;
+      text-shadow: 2px 2px 0 #333;
+    }
+    #start h1 {
+      font-size: 3rem;
+      margin-bottom: 0.5rem;
+    }
+    #start p, #gameover p {
+      font-size: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+    .btn {
+      display: inline-block;
+      padding: 12px 32px;
+      font-size: 1.2rem;
+      border: 3px solid #fff;
+      border-radius: 40px;
+      background: rgba(255,255,255,0.2);
+      color: #fff;
+      cursor: pointer;
+      text-shadow: none;
+      pointer-events: auto;
+      transition: background 0.2s, transform 0.1s;
+    }
+    .btn:hover { background: rgba(255,255,255,0.4); transform: scale(1.05); }
+    .btn:active { transform: scale(0.95); }
+    #score {
+      position: absolute;
+      top: 20px; left: 50%;
+      transform: translateX(-50%);
+      font-size: 2.5rem;
+      color: #fff;
+      text-shadow: 2px 2px 0 #333;
+      pointer-events: none;
+    }
+    #gameover h2 { font-size: 2.5rem; margin-bottom: 0.5rem; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="score" class="hidden">0</div>
+  <div id="ui">
+    <div id="start">
+      <h1>🦄 Flappy Unicorn</h1>
+      <p>Tap, click, or press space to fly!</p>
+      <button class="btn" id="startBtn">Start Game</button>
+    </div>
+    <div id="gameover" class="hidden">
+      <h2>Game Over</h2>
+      <p>Score: <span id="finalScore">0</span></p>
+      <button class="btn" id="restartBtn">Play Again</button>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const startScreen = document.getElementById('start');
+    const gameoverScreen = document.getElementById('gameover');
+    const finalScoreEl = document.getElementById('finalScore');
+    const startBtn = document.getElementById('startBtn');
+    const restartBtn = document.getElementById('restartBtn');
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // --- Game constants ---
+    const GRAVITY = 0.4;
+    const FLAP_STRENGTH = -7;
+    const PIPE_SPEED = 3;
+    const PIPE_WIDTH = 60;
+    const PIPE_GAP = 160;
+    const PIPE_SPAWN_RATE = 120; // frames
+    const GROUND_HEIGHT = 60;
+
+    // --- State ---
+    let running = false;
+    let gameOver = false;
+    let frame = 0;
+    let score = 0;
+    let width, height;
+
+    // --- Entities ---
+    let unicorn = {};
+    let pipes = [];
+    let clouds = [];
+    let particles = [];
+
+    function initGame() {
+      width = canvas.width;
+      height = canvas.height;
+      unicorn = {
+        x: width * 0.25,
+        y: height / 2,
+        w: 40, h: 30,
+        vy: 0,
+        angle: 0,
+        flapTimer: 0
+      };
+      pipes = [];
+      particles = [];
+      score = 0;
+      frame = 0;
+      gameOver = false;
+      running = true;
+      scoreEl.textContent = '0';
+      scoreEl.classList.remove('hidden');
+      startScreen.classList.add('hidden');
+      gameoverScreen.classList.add('hidden');
+    }
+
+    function spawnCloud() {
+      clouds.push({
+        x: width + 50,
+        y: Math.random() * height * 0.5,
+        w: 60 + Math.random() * 80,
+        speed: 0.5 + Math.random() * 0.5
+      });
+    }
+    // initial clouds
+    for (let i = 0; i < 6; i++) {
+      clouds.push({
+        x: Math.random() * width,
+        y: Math.random() * height * 0.5,
+        w: 60 + Math.random() * 80,
+        speed: 0.5 + Math.random() * 0.5
+      });
+    }
+
+    function spawnPipe() {
+      const minY = 80;
+      const maxY = height - GROUND_HEIGHT - PIPE_GAP - 80;
+      const topH = minY + Math.random() * (maxY - minY);
+      pipes.push({
+        x: width,
+        topH: topH,
+        bottomY: topH + PIPE_GAP,
+        passed: false
+      });
+    }
+
+    function spawnParticles(x, y, color) {
+      for (let i = 0; i < 5; i++) {
+        particles.push({
+          x: x,
+          y: y,
+          vx: (Math.random() - 0.5) * 3,
+          vy: (Math.random() - 0.5) * 3,
+          life: 30 + Math.random() * 20,
+          color: color,
+          size: 2 + Math.random() * 3
+        });
+      }
+    }
+
+    function flap() {
+      if (!running) return;
+      unicorn.vy = FLAP_STRENGTH;
+      unicorn.flapTimer = 10;
+      spawnParticles(unicorn.x, unicorn.y + 10, `hsl(${Math.random()*360},80%,70%)`);
+    }
+
+    function update() {
+      if (!running || gameOver) return;
+      frame++;
+      width = canvas.width;
+      height = canvas.height;
+
+      // Clouds
+      clouds.forEach(c => c.x -= c.speed);
+      if (clouds.length < 10 && Math.random() < 0.01) spawnCloud();
+      clouds = clouds.filter(c => c.x + c.w > -50);
+
+      // Unicorn physics
+      unicorn.vy += GRAVITY;
+      unicorn.y += unicorn.vy;
+      unicorn.angle = Math.min(Math.PI / 4, Math.max(-Math.PI / 4, (unicorn.vy * 0.05)));
+      if (unicorn.flapTimer > 0) unicorn.flapTimer--;
+
+      // Ground collision
+      if (unicorn.y + unicorn.h/2 > height - GROUND_HEIGHT) {
+        unicorn.y = height - GROUND_HEIGHT - unicorn.h/2;
+        endGame();
+      }
+      // Ceiling collision
+      if (unicorn.y - unicorn.h/2 < 0) {
+        unicorn.y = unicorn.h/2;
+        unicorn.vy = 0;
+      }
+
+      // Pipes
+      if (frame % PIPE_SPAWN_RATE === 0) spawnPipe();
+      pipes.forEach(p => {
+        p.x -= PIPE_SPEED;
+        if (!p.passed && p.x + PIPE_WIDTH < unicorn.x) {
+          p.passed = true;
+          score++;
+          scoreEl.textContent = score;
+        }
+        // Collision AABB
+        if (
+          unicorn.x + unicorn.w/2 > p.x &&
+          unicorn.x - unicorn.w/2 < p.x + PIPE_WIDTH &&
+          (unicorn.y - unicorn.h/2 < p.topH || unicorn.y + unicorn.h/2 > p.bottomY)
+        ) {
+          endGame();
+        }
+      });
+      pipes = pipes.filter(p => p.x + PIPE_WIDTH > 0);
+
+      // Particles
+      particles.forEach(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life--;
+        p.size *= 0.95;
+      });
+      particles = particles.filter(p => p.life > 0);
+
+      // Rainbow trail
+      if (frame % 5 === 0) {
+        particles.push({
+          x: unicorn.x - 10,
+          y: unicorn.y,
+          vx: -1,
+          vy: 0,
+          life: 40,
+          color: `hsl(${(frame * 2) % 360},80%,70%)`,
+          size: 4
+        });
+      }
+    }
+
+    function endGame() {
+      gameOver = true;
+      running = false;
+      finalScoreEl.textContent = score;
+      scoreEl.classList.add('hidden');
+      gameoverScreen.classList.remove('hidden');
+    }
+
+    // --- Drawing ---
+    function drawCloud(c) {
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, c.w * 0.3, 0, Math.PI * 2);
+      ctx.arc(c.x + c.w * 0.25, c.y - c.w * 0.1, c.w * 0.35, 0, Math.PI * 2);
+      ctx.arc(c.x + c.w * 0.5, c.y, c.w * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawGround() {
+      const gh = GROUND_HEIGHT;
+      const y = height - gh;
+      ctx.fillStyle = '#8B5A2B';
+      ctx.fillRect(0, y, width, gh);
+      ctx.fillStyle = '#4CAF50';
+      ctx.fillRect(0, y, width, 12);
+      // stripes
+      ctx.fillStyle = '#6D4C41';
+      for (let i = (frame * 2) % 40 - 40; i < width; i += 40) {
+        ctx.fillRect(i, y + 12, 20, gh - 12);
+      }
+    }
+
+    function drawUnicorn(u) {
+      ctx.save();
+      ctx.translate(u.x, u.y);
+      ctx.rotate(u.angle);
+
+      // Body
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, u.w/2, u.h/2, 0, 0, Math.PI*2);
+      ctx.fill();
+
+      // Head
+      ctx.beginPath();
+      ctx.ellipse(12, -6, 10, 9, 0, 0, Math.PI*2);
+      ctx.fill();
+
+      // Snout
+      ctx.fillStyle = '#F8BBD0';
+      ctx.beginPath();
+      ctx.ellipse(18, -3, 6, 5, 0, 0, Math.PI*2);
+      ctx.fill();
+
+      // Eye
+      ctx.fillStyle = '#333';
+      ctx.beginPath();
+      ctx.arc(14, -8, 2.5, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(15, -9, 1, 0, Math.PI*2);
+      ctx.fill();
+
+      // Horn
+      ctx.fillStyle = '#FFD700';
+      ctx.beginPath();
+      ctx.moveTo(14, -14);
+      ctx.lineTo(18, -28);
+      ctx.lineTo(22, -14);
+      ctx.closePath();
+      ctx.fill();
+      // Horn stripes
+      ctx.strokeStyle = '#E65100';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(16, -19); ctx.lineTo(19, -19);
+      ctx.moveTo(17, -23); ctx.lineTo(20, -23);
+      ctx.stroke();
+
+      // Mane
+      ctx.fillStyle = '#E040FB';
+      ctx.beginPath();
+      ctx.arc(-2, -10, 7, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = '#00BCD4';
+      ctx.beginPath();
+      ctx.arc(-6, -6, 5, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = '#FF4081';
+      ctx.beginPath();
+      ctx.arc(-4, -2, 4, 0, Math.PI*2);
+      ctx.fill();
+
+      // Ear
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.ellipse(8, -16, 3, 5, -0.3, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = '#F8BBD0';
+      ctx.beginPath();
+      ctx.ellipse(8, -16, 1.5, 3, -0.3, 0, Math.PI*2);
+      ctx.fill();
+
+      // Legs (flap animation)
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      const legOffset = u.flapTimer > 0 ? -6 : 2;
+      ctx.beginPath();
+      ctx.moveTo(-5, 8);
+      ctx.lineTo(-8, 16 + legOffset);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(5, 8);
+      ctx.lineTo(8, 16 + legOffset);
+      ctx.stroke();
+
+      // Wing
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.beginPath();
+      ctx.ellipse(-5, 2, 8, 12, u.flapTimer > 0 ? -0.5 : 0.2, 0, Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle = '#E1BEE7';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(-10, -4); ctx.lineTo(-5, 14);
+      ctx.moveTo(-7, -6); ctx.lineTo(-3, 12);
+      ctx.moveTo(-4, -6); ctx.lineTo(0, 10);
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    function drawPipe(p) {
+      // Top pipe
+      const gradT = ctx.createLinearGradient(p.x, 0, p.x + PIPE_WIDTH, 0);
+      gradT.addColorStop(0, '#388E3C');
+      gradT.addColorStop(0.5, '#4CAF50');
+      gradT.addColorStop(1, '#2E7D32');
+      ctx.fillStyle = gradT;
+      ctx.fillRect(p.x, 0, PIPE_WIDTH, p.topH);
+      // Top cap
+      ctx.fillStyle = '#43A047';
+      ctx.fillRect(p.x - 3, p.topH - 24, PIPE_WIDTH + 6, 24);
+      ctx.strokeStyle = '#1B5E20';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(p.x - 3, p.topH - 24, PIPE_WIDTH + 6, 24);
+
+      // Bottom pipe
+      const gradB = ctx.createLinearGradient(p.x, p.bottomY, p.x + PIPE_WIDTH, p.bottomY);
+      gradB.addColorStop(0, '#388E3C');
+      gradB.addColorStop(0.5, '#4CAF50');
+      gradB.addColorStop(1, '#2E7D32');
+      ctx.fillStyle = gradB;
+      ctx.fillRect(p.x, p.bottomY, PIPE_WIDTH, height - p.bottomY - GROUND_HEIGHT);
+      // Bottom cap
+      ctx.fillStyle = '#43A047';
+      ctx.fillRect(p.x - 3, p.bottomY, PIPE_WIDTH + 6, 24);
+      ctx.strokeStyle = '#1B5E20';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(p.x - 3, p.bottomY, PIPE_WIDTH + 6, 24);
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, width, height);
+
+      // Sky background is handled by CSS (gradient)
+      // Draw clouds behind pipes
+      clouds.forEach(drawCloud);
+
+      // Pipes
+      pipes.forEach(drawPipe);
+
+      // Particles
+      particles.forEach(p => {
+        ctx.globalAlpha = p.life / 40;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+        ctx.fill();
+      });
+      ctx.globalAlpha = 1;
+
+      // Ground
+      drawGround();
+
+      // Unicorn
+      if (running || gameOver) {
+        drawUnicorn(unicorn);
+      }
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    // --- Input ---
+    function onAction(e) {
+      if (e.type === 'keydown' && e.code !== 'Space' && e.code !== 'ArrowUp') return;
+      if (e.type === 'keydown') e.preventDefault();
+      if (!running && !gameOver) {
+        // start screen visible, let button handle it
+      } else if (running) {
+        flap();
+      }
+    }
+
+    window.addEventListener('keydown', onAction);
+    canvas.addEventListener('pointerdown', (e) => {
+      if (running) flap();
+    });
+    window.addEventListener('touchstart', (e) => {
+      if (running) { e.preventDefault(); flap(); }
+    }, { passive: false });
+
+    startBtn.addEventListener('click', () => {
+      initGame();
+    });
+    restartBtn.addEventListener('click', () => {
+      clouds = [];
+      for (let i = 0; i < 6; i++) {
+        spawnCloud();
+      }
+      initGame();
+    });
+
+    // Start loop
+    loop();
+  </script>
+</body>
+</html>
