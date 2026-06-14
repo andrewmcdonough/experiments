@@ -16,3 +16,4 @@ A few experimental projects.
 * [unicorn-race](https://experiments.andrewmcdonough.com/unicorn-race/): Race 4 rival unicorns — hammer space to go faster, top 3 get the podium with streamers
 * [bbc-basic](https://experiments.andrewmcdonough.com/bbc-basic/): A BBC Micro BASIC interpreter in the browser — type and run classic BASIC programs
 * [game-of-life](https://experiments.andrewmcdonough.com/game-of-life/): Conway's Game of Life — paint cells, stamp classic patterns, and watch neon life evolve
+* [german-genders](https://experiments.andrewmcdonough.com/german-genders/): Learn the gender of German nouns — press space to reveal, or 1/2/3 to guess and track your score

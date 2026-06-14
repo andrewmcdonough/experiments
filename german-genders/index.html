@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>German Genders</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0a0a0a;
+      color: #fff;
+      font-family: 'Georgia', serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    #score {
+      position: fixed;
+      top: 1.5rem;
+      right: 2rem;
+      font-family: 'Courier New', monospace;
+      font-size: 1rem;
+      color: #666;
+      letter-spacing: 0.05em;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    #score.visible { opacity: 1; }
+
+    #card {
+      text-align: center;
+      padding: 2rem;
+    }
+
+    #word-line {
+      font-size: 5rem;
+      font-weight: 400;
+      letter-spacing: 0.02em;
+      line-height: 1.1;
+      display: flex;
+      align-items: baseline;
+      justify-content: center;
+      gap: 0.5rem;
+      margin-bottom: 1.2rem;
+    }
+
+    #article {
+      display: inline-block;
+      min-width: 3.5rem;
+      transition: color 0.2s;
+    }
+    #article.placeholder { color: #333; }
+    #article.der  { color: #5b8dd9; }
+    #article.die  { color: #e05c7a; }
+    #article.das  { color: #5dbea3; }
+
+    #german-word {
+      color: #f0f0f0;
+    }
+
+    #english {
+      font-size: 1.5rem;
+      color: #777;
+      font-style: italic;
+      letter-spacing: 0.03em;
+      min-height: 2rem;
+    }
+
+    #rule {
+      margin-top: 1.4rem;
+      font-size: 1.05rem;
+      color: #888;
+      font-style: italic;
+      letter-spacing: 0.02em;
+      min-height: 1.6rem;
+      opacity: 0;
+      transition: opacity 0.3s 0.1s;
+    }
+    #rule.visible { opacity: 1; }
+
+    #hint {
+      position: fixed;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%);
+      font-family: 'Courier New', monospace;
+      font-size: 0.8rem;
+      color: #333;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      transition: opacity 0.6s;
+    }
+    #hint.hidden { opacity: 0; }
+
+    #flash {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    #flash.correct  { background: rgba(91, 214, 130, 0.08); opacity: 1; }
+    #flash.wrong    { background: rgba(224, 92, 122, 0.1);  opacity: 1; }
+  </style>
+</head>
+<body>
+
+<div id="score"></div>
+
+<div id="card">
+  <div id="word-line">
+    <span id="article" class="placeholder">___</span>
+    <span id="german-word"></span>
+  </div>
+  <div id="english"></div>
+  <div id="rule"></div>
+</div>
+
+<div id="hint">space to reveal &nbsp;·&nbsp; 1 der &nbsp;·&nbsp; 2 die &nbsp;·&nbsp; 3 das</div>
+<div id="flash"></div>
+
+<script>
+  const NOUNS = [
+    // Masculine
+    { word: 'Montag',        english: 'Monday',      gender: 'der', rule: 'masculine — days of the week are masculine' },
+    { word: 'März',          english: 'March',       gender: 'der', rule: 'masculine — months are masculine' },
+    { word: 'Frühling',      english: 'spring',      gender: 'der', rule: 'masculine — seasons are masculine' },
+    { word: 'Winter',        english: 'winter',      gender: 'der', rule: 'masculine — seasons are masculine' },
+    { word: 'Regen',         english: 'rain',        gender: 'der', rule: 'masculine — ends in -en, often masculine' },
+    { word: 'Wagen',         english: 'car',         gender: 'der', rule: 'masculine — ends in -en, often masculine' },
+    { word: 'König',         english: 'king',        gender: 'der', rule: 'masculine — ends in -ig, always masculine' },
+    { word: 'Teppich',       english: 'carpet',      gender: 'der', rule: 'masculine — ends in -ich, always masculine' },
+    { word: 'Lehrling',      english: 'apprentice',  gender: 'der', rule: 'masculine — ends in -ling, always masculine' },
+    { word: 'Motor',         english: 'motor',       gender: 'der', rule: 'masculine — ends in -or, always masculine' },
+    // Feminine
+    { word: 'Hoffnung',      english: 'hope',        gender: 'die', rule: 'feminine — ends in -ung, always feminine' },
+    { word: 'Freiheit',      english: 'freedom',     gender: 'die', rule: 'feminine — ends in -heit, always feminine' },
+    { word: 'Möglichkeit',   english: 'possibility', gender: 'die', rule: 'feminine — ends in -keit, always feminine' },
+    { word: 'Freundschaft',  english: 'friendship',  gender: 'die', rule: 'feminine — ends in -schaft, always feminine' },
+    { word: 'Situation',     english: 'situation',   gender: 'die', rule: 'feminine — ends in -tion, always feminine' },
+    { word: 'Qualität',      english: 'quality',     gender: 'die', rule: 'feminine — ends in -tät, always feminine' },
+    { word: 'Natur',         english: 'nature',      gender: 'die', rule: 'feminine — ends in -ur, mostly feminine' },
+    { word: 'Straße',        english: 'street',      gender: 'die', rule: 'feminine — ends in -e, mostly feminine' },
+    { word: 'Schule',        english: 'school',      gender: 'die', rule: 'feminine — ends in -e, mostly feminine' },
+    { word: 'Blume',         english: 'flower',      gender: 'die', rule: 'feminine — ends in -e, mostly feminine' },
+    // Neuter
+    { word: 'Mädchen',       english: 'girl',        gender: 'das', rule: 'neuter — ends in -chen, always neuter (even for female people!)' },
+    { word: 'Kindlein',      english: 'little child',gender: 'das', rule: 'neuter — ends in -lein, always neuter' },
+    { word: 'Instrument',    english: 'instrument',  gender: 'das', rule: 'neuter — ends in -ment, always neuter' },
+    { word: 'Datum',         english: 'date',        gender: 'das', rule: 'neuter — ends in -um, mostly neuter' },
+    { word: 'Gymnasium',     english: 'grammar school', gender: 'das', rule: 'neuter — ends in -ium, always neuter' },
+    { word: 'Haus',          english: 'house',       gender: 'das', rule: 'neuter — irregular, must be memorised' },
+    { word: 'Kind',          english: 'child',       gender: 'das', rule: 'neuter — irregular, must be memorised' },
+    { word: 'Auto',          english: 'car',         gender: 'das', rule: 'neuter — loanwords ending in -o are often neuter' },
+    { word: 'Wasser',        english: 'water',       gender: 'das', rule: 'neuter — irregular, must be memorised' },
+    { word: 'Buch',          english: 'book',        gender: 'das', rule: 'neuter — irregular, must be memorised' },
+  ];
+
+  const GENDER_KEYS = { '1': 'der', '2': 'die', '3': 'das' };
+
+  let deck = [];
+  let current = 0;
+  let state = 'question'; // 'question' | 'answer'
+  let correct = 0;
+  let attempted = 0;
+  let hintDismissed = false;
+
+  const $article    = document.getElementById('article');
+  const $word       = document.getElementById('german-word');
+  const $english    = document.getElementById('english');
+  const $rule       = document.getElementById('rule');
+  const $score      = document.getElementById('score');
+  const $hint       = document.getElementById('hint');
+  const $flash      = document.getElementById('flash');
+
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  function newDeck() {
+    deck = shuffle([...NOUNS]);
+    current = 0;
+  }
+
+  function showQuestion() {
+    state = 'question';
+    const noun = deck[current];
+    $article.textContent = '___';
+    $article.className = 'placeholder';
+    $word.textContent = noun.word;
+    $english.textContent = 'the ' + noun.english;
+    $rule.textContent = '';
+    $rule.classList.remove('visible');
+  }
+
+  function revealAnswer() {
+    state = 'answer';
+    const noun = deck[current];
+    $article.textContent = noun.gender;
+    $article.className = noun.gender;
+    $rule.textContent = noun.rule;
+    $rule.classList.add('visible');
+  }
+
+  function nextWord() {
+    current++;
+    if (current >= deck.length) newDeck();
+    showQuestion();
+  }
+
+  function updateScore() {
+    $score.textContent = correct + ' / ' + attempted;
+    $score.classList.add('visible');
+  }
+
+  function flashScreen(type) {
+    $flash.className = type;
+    clearTimeout($flash._t);
+    $flash._t = setTimeout(() => { $flash.className = ''; }, 350);
+  }
+
+  function dismissHint() {
+    if (!hintDismissed) {
+      hintDismissed = true;
+      $hint.classList.add('hidden');
+    }
+  }
+
+  document.addEventListener('keydown', (e) => {
+    const key = e.key;
+
+    if (key === ' ') {
+      e.preventDefault();
+      dismissHint();
+      if (state === 'question') {
+        revealAnswer();
+      } else {
+        nextWord();
+      }
+      return;
+    }
+
+    if (key in GENDER_KEYS) {
+      dismissHint();
+      const guess = GENDER_KEYS[key];
+
+      if (state === 'question') {
+        attempted++;
+        const noun = deck[current];
+        if (guess === noun.gender) {
+          correct++;
+          flashScreen('correct');
+        } else {
+          flashScreen('wrong');
+        }
+        updateScore();
+        revealAnswer();
+      } else {
+        nextWord();
+      }
+    }
+  });
+
+  newDeck();
+  showQuestion();
+</script>
+</body>
+</html>
