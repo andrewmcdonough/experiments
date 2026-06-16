@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Balloon Pop</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #000; overflow: hidden; font-family: 'Courier New', monospace; }
+    canvas#c { display: block; position: fixed; top: 0; left: 0; }
+
+    #statusBar {
+      position: fixed; top: 0; left: 0; right: 0;
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 16px; background: rgba(0,0,0,0.6);
+      z-index: 10; font-size: 13px; color: #888; letter-spacing: 0.05em;
+      pointer-events: none;
+    }
+    #statusBar.hidden { display: none; }
+    #statusDot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #444; flex-shrink: 0; transition: background 0.3s;
+    }
+    #statusDot.active { background: #39FF14; }
+    #statusDot.error  { background: #FF3366; }
+
+    #pip {
+      position: fixed; bottom: 16px; right: 16px;
+      width: 240px; height: 180px;
+      border-radius: 8px; overflow: hidden; z-index: 10;
+      background: #000; border: 1px solid rgba(255,255,255,0.1);
+    }
+    #webcam {
+      width: 100%; height: 100%; object-fit: cover;
+      transform: scaleX(-1); display: block;
+    }
+    #bodyCanvas {
+      position: absolute; top: 0; left: 0;
+      width: 100%; height: 100%; transform: scaleX(-1);
+    }
+
+    #startOverlay {
+      position: fixed; inset: 0; background: #111;
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 18px; z-index: 100;
+    }
+    #startOverlay h1 {
+      font-size: 72px; letter-spacing: 0.12em;
+      color: #fff; font-weight: normal;
+      text-shadow: 0 0 40px rgba(255,255,255,0.25);
+    }
+    #startOverlay .tagline {
+      font-size: 20px; color: #ccc; letter-spacing: 0.04em;
+    }
+    .rules {
+      list-style: none; margin: 6px 0;
+      display: flex; flex-direction: column; gap: 12px; text-align: center;
+    }
+    .rules li { font-size: 17px; color: #888; letter-spacing: 0.03em; }
+    .rules li strong { color: #fff; font-weight: normal; }
+
+    #startBtn {
+      margin-top: 14px; padding: 16px 56px;
+      background: #39FF14; border: none; color: #000;
+      font-family: 'Courier New', monospace; font-size: 18px; font-weight: bold;
+      letter-spacing: 0.14em; cursor: pointer; border-radius: 4px;
+      transition: transform 0.1s, background 0.15s;
+    }
+    #startBtn:hover { background: #66ff44; transform: scale(1.05); }
+
+    #playAgainBtn {
+      position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+      padding: 14px 48px; background: none;
+      border: 1px solid #39FF14; color: #39FF14;
+      font-family: 'Courier New', monospace; font-size: 16px;
+      letter-spacing: 0.14em; cursor: pointer; border-radius: 3px;
+      transition: background 0.2s, color 0.2s;
+      display: none; z-index: 200;
+    }
+    #playAgainBtn:hover { background: rgba(57,255,20,0.15); }
+    #playAgainBtn.visible { display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+
+  <div id="statusBar">
+    <div id="statusDot"></div>
+    <span id="statusText">Ready</span>
+  </div>
+
+  <div id="pip">
+    <video id="webcam" autoplay playsinline muted></video>
+    <canvas id="bodyCanvas"></canvas>
+  </div>
+
+  <button id="playAgainBtn">PLAY AGAIN</button>
+
+  <div id="startOverlay">
+    <h1>🎈 BALLOON POP</h1>
+    <p class="tagline">Pop balloons with any part of your body!</p>
+    <ul class="rules">
+      <li>🤚 Hit balloons with your <strong>hands, arms, feet or legs</strong></li>
+      <li>⏱ You have <strong>1 minute</strong> — pop as many as you can</li>
+      <li>🦄 <strong>Unicorn balloons</strong> float up rarely and are worth <strong>3 points</strong></li>
+      <li>👥 <strong>2 players?</strong> Both stand in frame for a head-to-head competition</li>
+    </ul>
+    <button id="startBtn">▶ START GAME</button>
+  </div>
+
+  <script type="module">
+    import { PoseLandmarker, FilesetResolver }
+      from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs';
+
+    // ── DOM refs ───────────────────────────────────────────────────────────────
+    const canvas       = document.getElementById('c');
+    const ctx          = canvas.getContext('2d');
+    const webcam       = document.getElementById('webcam');
+    const bodyCanvas   = document.getElementById('bodyCanvas');
+    const bodyCtx      = bodyCanvas.getContext('2d');
+    const statusDot    = document.getElementById('statusDot');
+    const statusText   = document.getElementById('statusText');
+    const statusBar    = document.getElementById('statusBar');
+    const startOverlay = document.getElementById('startOverlay');
+    const playAgainBtn = document.getElementById('playAgainBtn');
+
+    // ── Sizing ─────────────────────────────────────────────────────────────────
+    function resize() {
+      canvas.width  = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // ── Audio ──────────────────────────────────────────────────────────────────
+    let audioCtx = null;
+
+    function getAudio() {
+      if (!audioCtx) audioCtx = new AudioContext();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      return audioCtx;
+    }
+
+    function playTone(freq, dur, startTime, type = 'sine', vol = 0.28) {
+      const ac  = getAudio();
+      const osc = ac.createOscillator();
+      const g   = ac.createGain();
+      osc.connect(g);
+      g.connect(ac.destination);
+      osc.type = type;
+      osc.frequency.value = freq;
+      g.gain.setValueAtTime(vol, startTime);
+      g.gain.exponentialRampToValueAtTime(0.0001, startTime + dur);
+      osc.start(startTime);
+      osc.stop(startTime + dur + 0.01);
+    }
+
+    function playStartSequence(onGo) {
+      const ac  = getAudio();
+      const t0  = ac.currentTime + 0.05;
+      // Three countdown beeps
+      playTone(660, 0.13, t0 + 0, 'sine', 0.3);
+      playTone(660, 0.13, t0 + 1, 'sine', 0.3);
+      playTone(660, 0.13, t0 + 2, 'sine', 0.3);
+      // GO! — rising arpeggio
+      playTone(523, 0.14, t0 + 3.0,  'sine', 0.35);
+      playTone(659, 0.14, t0 + 3.14, 'sine', 0.35);
+      playTone(784, 0.14, t0 + 3.28, 'sine', 0.35);
+      playTone(1047, 0.45, t0 + 3.42, 'sine', 0.4);
+      setTimeout(onGo, (3.0 + 0.42 + 0.45 + 0.1) * 1000);
+    }
+
+    function playPop(isUnicorn) {
+      const ac  = getAudio();
+      const now = ac.currentTime;
+      if (isUnicorn) {
+        [523, 659, 784].forEach((f, i) => playTone(f, 0.13, now + i * 0.07, 'sine', 0.22));
+      } else {
+        const osc = ac.createOscillator();
+        const g   = ac.createGain();
+        osc.connect(g); g.connect(ac.destination);
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(350 + Math.random() * 200, now);
+        osc.frequency.exponentialRampToValueAtTime(60, now + 0.14);
+        g.gain.setValueAtTime(0.16, now);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + 0.14);
+        osc.start(now); osc.stop(now + 0.15);
+      }
+    }
+
+    function playFanfare() {
+      const ac  = getAudio();
+      const now = ac.currentTime;
+      [262, 330, 392, 523, 659, 784, 1047].forEach((f, i) =>
+        playTone(f, 0.2, now + i * 0.1, 'sine', 0.22)
+      );
+    }
+
+    // ── Game state ─────────────────────────────────────────────────────────────
+    let gameState    = 'idle';    // idle | countdown | playing | ended
+    let gameMode     = 'single';  // single | dual
+    let scores       = [0, 0];
+    let gameStartTime = 0;
+    let countdownStart = 0;
+    let maxDetectedDuringCountdown = 0;
+
+    const GAME_DURATION = 60; // seconds
+
+    // ── Balloon system ─────────────────────────────────────────────────────────
+    const balloons = [];
+    let nextBalloonAt  = 0; // performance.now() ms
+    let unicornTimes   = []; // elapsed seconds at which to spawn a unicorn
+
+    const HUES = [0, 30, 60, 160, 200, 280, 320];
+
+    function scheduleUnicorns() {
+      const n = 1 + Math.floor(Math.random() * 3); // 1-3
+      unicornTimes = Array.from({ length: n }, () => 8 + Math.random() * 46); // 8-54s within 60s game
+      unicornTimes.sort((a, b) => a - b);
+    }
+
+    function spawnBalloon(isUnicorn = false) {
+      const r    = isUnicorn ? 72 : (44 + Math.random() * 22);
+      // Center-weighted X: average of two randoms peaks at 0.5
+      const t     = (Math.random() + Math.random()) / 2;
+      const baseX = r + t * (canvas.width - 2 * r);
+      const speed = 2.5 + Math.random() * 2.0;
+      balloons.push({
+        baseX, x: baseX, y: canvas.height + r + 20,
+        vy: -speed,
+        r, hue: HUES[Math.floor(Math.random() * HUES.length)],
+        isUnicorn,
+        bobPhase: Math.random() * Math.PI * 2,
+        bobSpeed: 0.018 + Math.random() * 0.018,
+        bobAmp:   12 + Math.random() * 18,
+        popped: false,
+      });
+    }
+
+    function updateBalloons(elapsed) {
+      const now = performance.now();
+
+      // Spawn regular balloon on interval
+      if (now >= nextBalloonAt && balloons.length < 8) {
+        spawnBalloon(false);
+        nextBalloonAt = now + 1400 + Math.random() * 900;
+      }
+
+      // Spawn scheduled unicorn(s)
+      while (unicornTimes.length > 0 && elapsed >= unicornTimes[0]) {
+        unicornTimes.shift();
+        spawnBalloon(true);
+      }
+
+      // Move and prune
+      for (let i = balloons.length - 1; i >= 0; i--) {
+        const b = balloons[i];
+        if (b.popped) { balloons.splice(i, 1); continue; }
+        b.y          += b.vy;
+        b.bobPhase   += b.bobSpeed;
+        b.x           = b.baseX + Math.sin(b.bobPhase) * b.bobAmp;
+        if (b.y + b.r < -10) balloons.splice(i, 1);
+      }
+    }
+
+    function drawBalloon(b) {
+      const { x, y, r, hue, isUnicorn } = b;
+      ctx.save();
+
+      if (isUnicorn) {
+        const grad = ctx.createRadialGradient(x - r * 0.3, y - r * 0.35, r * 0.08, x, y, r);
+        grad.addColorStop(0,   'hsl(300,100%,92%)');
+        grad.addColorStop(0.4, 'hsl(60,100%,78%)');
+        grad.addColorStop(0.7, 'hsl(180,100%,68%)');
+        grad.addColorStop(1,   'hsl(240,100%,55%)');
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle   = grad;
+        ctx.shadowColor = 'rgba(200,100,255,0.8)';
+        ctx.shadowBlur  = 22;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Animated shimmer ring
+        ctx.beginPath();
+        ctx.arc(x, y, r + 5, 0, Math.PI * 2);
+        ctx.strokeStyle = `hsla(${(performance.now() / 15) % 360},100%,80%,0.55)`;
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+
+        // Unicorn emoji
+        ctx.font = `${Math.floor(r * 0.85)}px serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🦄', x, y + 2);
+      } else {
+        const grad = ctx.createRadialGradient(x - r * 0.35, y - r * 0.4, r * 0.06, x, y, r);
+        grad.addColorStop(0,   `hsl(${hue},100%,92%)`);
+        grad.addColorStop(0.5, `hsl(${hue},100%,65%)`);
+        grad.addColorStop(1,   `hsl(${hue}, 80%,38%)`);
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle   = grad;
+        ctx.shadowColor = `hsla(${hue},100%,60%,0.55)`;
+        ctx.shadowBlur  = 14;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+
+      // Knot
+      ctx.beginPath();
+      ctx.arc(x, y + r, 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = isUnicorn ? '#9933cc' : `hsl(${hue},70%,32%)`;
+      ctx.fill();
+
+      // String
+      ctx.beginPath();
+      ctx.moveTo(x, y + r + 4);
+      ctx.bezierCurveTo(x + 12, y + r + 28, x - 12, y + r + 52, x + 6, y + r + 72);
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth   = 1.5;
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    // ── Effects ────────────────────────────────────────────────────────────────
+    const burstParticles = [];
+    const scoreLabels    = [];
+    const confettiPieces = [];
+
+    function spawnBurst(x, y, hue, isUnicorn) {
+      const n = isUnicorn ? 32 : 18;
+      for (let i = 0; i < n; i++) {
+        const angle = (i / n) * Math.PI * 2 + Math.random() * 0.4;
+        const speed = 3 + Math.random() * 7;
+        burstParticles.push({
+          x, y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          r:  isUnicorn ? 4 + Math.random() * 6 : 3 + Math.random() * 4,
+          hue: isUnicorn ? Math.random() * 360 : hue + (Math.random() - 0.5) * 50,
+          life: 1,
+          decay: 0.028 + Math.random() * 0.028,
+        });
+      }
+    }
+
+    function spawnScoreLabel(x, y, text, hue) {
+      scoreLabels.push({
+        x, y,
+        vx: (Math.random() - 0.5) * 2.5,
+        vy: -2.8,
+        text, hue,
+        life: 1,
+        decay: 0.016,
+      });
+    }
+
+    function spawnConfetti() {
+      for (let i = 0; i < 300; i++) {
+        confettiPieces.push({
+          x:     Math.random() * canvas.width,
+          y:     -20 - Math.random() * 250,
+          vx:    (Math.random() - 0.5) * 3.5,
+          vy:    2 + Math.random() * 4.5,
+          w:     5 + Math.random() * 9,
+          h:     3 + Math.random() * 5,
+          hue:   Math.random() * 360,
+          angle: Math.random() * Math.PI * 2,
+          spin:  (Math.random() - 0.5) * 0.22,
+        });
+      }
+    }
+
+    function updateDrawEffects() {
+      // Burst particles
+      for (let i = burstParticles.length - 1; i >= 0; i--) {
+        const p = burstParticles[i];
+        p.life -= p.decay;
+        if (p.life <= 0) { burstParticles.splice(i, 1); continue; }
+        p.x  += p.vx; p.y += p.vy;
+        p.vx *= 0.93; p.vy *= 0.93;
+        p.vy += 0.1;
+
+        ctx.globalAlpha = p.life;
+        ctx.shadowColor = `hsl(${p.hue},100%,65%)`;
+        ctx.shadowBlur  = 10;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r * (0.4 + p.life * 0.6), 0, Math.PI * 2);
+        ctx.fillStyle = `hsl(${p.hue},100%,70%)`;
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+
+      // Floating score labels
+      for (let i = scoreLabels.length - 1; i >= 0; i--) {
+        const s = scoreLabels[i];
+        s.life -= s.decay;
+        if (s.life <= 0) { scoreLabels.splice(i, 1); continue; }
+        s.x += s.vx; s.y += s.vy;
+        ctx.save();
+        ctx.globalAlpha    = s.life;
+        ctx.font           = `bold ${Math.round(20 + (1 - s.life) * 10)}px "Courier New", monospace`;
+        ctx.fillStyle      = `hsl(${s.hue},100%,78%)`;
+        ctx.shadowColor    = `hsl(${s.hue},100%,60%)`;
+        ctx.shadowBlur     = 14;
+        ctx.textAlign      = 'center';
+        ctx.textBaseline   = 'middle';
+        ctx.fillText(s.text, s.x, s.y);
+        ctx.restore();
+      }
+
+      // Confetti
+      for (let i = confettiPieces.length - 1; i >= 0; i--) {
+        const c = confettiPieces[i];
+        c.x += c.vx; c.y += c.vy; c.vy += 0.09; c.angle += c.spin;
+        if (c.y > canvas.height + 30) { confettiPieces.splice(i, 1); continue; }
+        ctx.save();
+        ctx.translate(c.x, c.y);
+        ctx.rotate(c.angle);
+        ctx.fillStyle = `hsl(${c.hue},100%,62%)`;
+        ctx.fillRect(-c.w / 2, -c.h / 2, c.w, c.h);
+        ctx.restore();
+      }
+    }
+
+    // ── Collision detection ────────────────────────────────────────────────────
+    const HIT_RADIUS = 24; // extra reach beyond balloon radius
+
+    function checkCollisions(allLandmarks) {
+      allLandmarks.forEach((lms, pi) => {
+        if (pi >= 2) return; // ignore 3rd+ body
+
+        // Determine which player this person is by torso X
+        const lSh = lms[11], rSh = lms[12];
+        if (!lSh || !rSh) return;
+        const torsoX  = (1 - (lSh.x + rSh.x) / 2) * canvas.width;
+        const playerIdx = (gameMode === 'dual' && torsoX >= canvas.width / 2) ? 1 : 0;
+
+        // Hit points: elbows [13,14], wrists [15,16], knees [25,26], ankles [27,28]
+        for (const idx of [13, 14, 15, 16, 25, 26, 27, 28]) {
+          const lm = lms[idx];
+          if (!lm || (lm.visibility ?? 1) < 0.25) continue;
+          const hx = (1 - lm.x) * canvas.width;
+          const hy = lm.y * canvas.height;
+
+          for (const b of balloons) {
+            if (b.popped) continue;
+            const dx = hx - b.x, dy = hy - b.y;
+            if (Math.sqrt(dx * dx + dy * dy) < b.r + HIT_RADIUS) {
+              popBalloon(b, playerIdx);
+            }
+          }
+        }
+      });
+    }
+
+    function popBalloon(b, playerIdx) {
+      if (b.popped) return;
+      b.popped = true;
+      const pts = b.isUnicorn ? 3 : 1;
+      scores[playerIdx] += pts;
+      spawnBurst(b.x, b.y, b.hue, b.isUnicorn);
+      spawnScoreLabel(b.x, b.y - b.r - 10, b.isUnicorn ? '+3 🦄' : '+1', b.isUnicorn ? 300 : b.hue);
+      playPop(b.isUnicorn);
+    }
+
+    // ── HUD ────────────────────────────────────────────────────────────────────
+    function drawHUD() {
+      const elapsed   = (performance.now() - gameStartTime) / 1000;
+      const remaining = Math.max(0, GAME_DURATION - elapsed);
+      const mins      = Math.floor(remaining / 60);
+      const secs      = Math.floor(remaining % 60);
+      const timeStr   = `${mins}:${String(secs).padStart(2, '0')}`;
+      const urgent    = remaining < 15;
+
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(0, 0, canvas.width, 58);
+
+      ctx.textBaseline = 'middle';
+      const cy = 29;
+
+      if (gameMode === 'single') {
+        ctx.font      = 'bold 26px "Courier New", monospace';
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'center';
+        ctx.fillText(`SCORE: ${scores[0]}`, canvas.width * 0.38, cy);
+        ctx.fillStyle = urgent ? '#ff4444' : '#fff';
+        ctx.fillText(timeStr, canvas.width * 0.62, cy);
+      } else {
+        ctx.font      = 'bold 24px "Courier New", monospace';
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#39FF14';
+        ctx.fillText(`P1: ${scores[0]}`, 22, cy);
+
+        ctx.textAlign = 'center';
+        ctx.fillStyle = urgent ? '#ff4444' : '#fff';
+        ctx.fillText(timeStr, canvas.width / 2, cy);
+
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#FF2D55';
+        ctx.fillText(`P2: ${scores[1]}`, canvas.width - 22, cy);
+      }
+      ctx.restore();
+    }
+
+    // ── Countdown overlay ──────────────────────────────────────────────────────
+    function drawCountdown() {
+      const elapsed = (performance.now() - countdownStart) / 1000;
+      const label   = elapsed < 1 ? '3' : elapsed < 2 ? '2' : elapsed < 3 ? '1' : 'GO!';
+      const isGo    = label === 'GO!';
+
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const beat = 1 + Math.sin((elapsed % 1) * Math.PI) * 0.14;
+      ctx.save();
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.scale(beat, beat);
+      ctx.font           = `bold ${isGo ? 110 : 160}px "Courier New", monospace`;
+      ctx.textAlign      = 'center';
+      ctx.textBaseline   = 'middle';
+      ctx.fillStyle      = isGo ? '#39FF14' : '#fff';
+      ctx.shadowColor    = isGo ? '#39FF14' : '#fff';
+      ctx.shadowBlur     = 50;
+      ctx.fillText(label, 0, 0);
+      ctx.restore();
+    }
+
+    // ── Game-over overlay ──────────────────────────────────────────────────────
+    function drawGameOver() {
+      ctx.fillStyle = 'rgba(0,0,0,0.72)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      // Title
+      ctx.font        = `bold 68px "Courier New", monospace`;
+      ctx.fillStyle   = '#fff';
+      ctx.shadowColor = '#fff';
+      ctx.shadowBlur  = 30;
+      ctx.fillText("TIME'S UP!", cx, cy - 90);
+      ctx.shadowBlur = 0;
+
+      if (gameMode === 'single') {
+        ctx.font      = 'bold 52px "Courier New", monospace';
+        ctx.fillStyle = '#FFE600';
+        ctx.shadowColor = '#FFE600'; ctx.shadowBlur = 20;
+        ctx.fillText(`SCORE: ${scores[0]}`, cx, cy);
+        ctx.shadowBlur = 0;
+      } else {
+        ctx.font      = 'bold 38px "Courier New", monospace';
+        ctx.fillStyle = '#39FF14';
+        ctx.fillText(`PLAYER 1: ${scores[0]}`, cx, cy - 10);
+        ctx.fillStyle = '#FF2D55';
+        ctx.fillText(`PLAYER 2: ${scores[1]}`, cx, cy + 55);
+
+        const winner = scores[0] > scores[1] ? '🏆 PLAYER 1 WINS!'
+                     : scores[1] > scores[0] ? '🏆 PLAYER 2 WINS!'
+                     : "🤝 IT'S A TIE!";
+        ctx.font        = 'bold 42px "Courier New", monospace';
+        ctx.fillStyle   = '#FFE600';
+        ctx.shadowColor = '#FFE600'; ctx.shadowBlur = 24;
+        ctx.fillText(winner, cx, cy + 130);
+        ctx.shadowBlur = 0;
+      }
+      ctx.restore();
+    }
+
+    // ── Skeleton PiP ──────────────────────────────────────────────────────────
+    const BONE_PAIRS = [
+      [11,12],[11,13],[13,15],[12,14],[14,16],
+      [11,23],[12,24],[23,24],
+      [23,25],[25,27],[24,26],[26,28],
+    ];
+    const PERSON_COLORS = ['#39FF14','#FF2D55','#3D7EFF','#FFE600'];
+
+    function drawSkeleton(allLandmarks) {
+      bodyCtx.clearRect(0, 0, bodyCanvas.width, bodyCanvas.height);
+      const W = bodyCanvas.width, H = bodyCanvas.height;
+      allLandmarks.forEach((lms, pi) => {
+        const col = PERSON_COLORS[pi % PERSON_COLORS.length];
+        bodyCtx.strokeStyle = col;
+        bodyCtx.lineWidth   = 2;
+        bodyCtx.globalAlpha = 0.85;
+        for (const [a, b] of BONE_PAIRS) {
+          if (!lms[a] || !lms[b]) continue;
+          if ((lms[a].visibility ?? 1) < 0.3 || (lms[b].visibility ?? 1) < 0.3) continue;
+          bodyCtx.beginPath();
+          bodyCtx.moveTo(lms[a].x * W, lms[a].y * H);
+          bodyCtx.lineTo(lms[b].x * W, lms[b].y * H);
+          bodyCtx.stroke();
+        }
+        bodyCtx.fillStyle   = col;
+        bodyCtx.globalAlpha = 1;
+        for (const lm of lms) {
+          if ((lm.visibility ?? 1) < 0.3) continue;
+          bodyCtx.beginPath();
+          bodyCtx.arc(lm.x * W, lm.y * H, 3, 0, Math.PI * 2);
+          bodyCtx.fill();
+        }
+      });
+    }
+
+    // ── Coordinate helper ──────────────────────────────────────────────────────
+    // (unused directly but kept for reference; toC pattern used inline above)
+
+    // ── Render loop ────────────────────────────────────────────────────────────
+    function renderLoop() {
+      requestAnimationFrame(renderLoop);
+
+      // Always draw mirrored webcam feed
+      if (webcam.readyState >= 2) {
+        ctx.save();
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(webcam, 0, 0, canvas.width, canvas.height);
+        ctx.restore();
+      } else if (gameState !== 'idle') {
+        ctx.fillStyle = '#111';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+
+      if (gameState === 'countdown') {
+        drawCountdown();
+      }
+
+      if (gameState === 'playing') {
+        ctx.fillStyle = 'rgba(0,0,0,0.10)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const elapsed = (performance.now() - gameStartTime) / 1000;
+        updateBalloons(elapsed);
+        for (const b of balloons) drawBalloon(b);
+        updateDrawEffects();
+        drawHUD();
+
+        if (elapsed >= GAME_DURATION) endGame();
+      }
+
+      if (gameState === 'ended') {
+        ctx.fillStyle = 'rgba(0,0,0,0.10)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        updateDrawEffects();
+        drawGameOver();
+      }
+    }
+    requestAnimationFrame(renderLoop);
+
+    // ── Game flow ──────────────────────────────────────────────────────────────
+    function startCountdown() {
+      gameState    = 'countdown';
+      countdownStart = performance.now();
+      maxDetectedDuringCountdown = 0;
+      statusBar.classList.add('hidden');
+
+      playStartSequence(() => {
+        gameMode = maxDetectedDuringCountdown >= 2 ? 'dual' : 'single';
+        startGame();
+      });
+    }
+
+    function startGame() {
+      // Clear all game data
+      scores       = [0, 0];
+      balloons.length       = 0;
+      burstParticles.length = 0;
+      scoreLabels.length    = 0;
+      confettiPieces.length = 0;
+      scheduleUnicorns();
+
+      gameState     = 'playing';
+      gameStartTime = performance.now();
+      nextBalloonAt = performance.now() + 600; // first balloon after 0.6s
+    }
+
+    function endGame() {
+      gameState = 'ended';
+      spawnConfetti();
+      playFanfare();
+      playAgainBtn.classList.add('visible');
+    }
+
+    playAgainBtn.addEventListener('click', () => {
+      playAgainBtn.classList.remove('visible');
+      startCountdown();
+    });
+
+    // ── MediaPipe ─────────────────────────────────────────────────────────────
+    let poseLandmarker = null;
+    let lastVideoTime  = -1;
+
+    async function initMediaPipe() {
+      statusText.textContent = 'Loading AI model…';
+      const vision = await FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
+      );
+      poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+          delegate: 'GPU',
+        },
+        runningMode: 'VIDEO',
+        numPoses: 4,
+      });
+      await initCamera();
+    }
+
+    async function initCamera() {
+      statusText.textContent = 'Requesting camera…';
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+          audio: false,
+        });
+        webcam.srcObject = stream;
+        await new Promise(res => { webcam.onloadedmetadata = res; });
+        webcam.play();
+        bodyCanvas.width  = 240;
+        bodyCanvas.height = 180;
+        statusDot.classList.add('active');
+        statusText.textContent = 'Camera ready';
+        startPoseLoop();
+        startCountdown();
+      } catch (e) {
+        statusDot.classList.add('error');
+        statusText.textContent = 'Camera access denied — please allow camera and reload.';
+        statusBar.classList.remove('hidden');
+      }
+    }
+
+    function startPoseLoop() {
+      function poseLoop() {
+        requestAnimationFrame(poseLoop);
+        if (!poseLandmarker || !webcam.videoWidth) return;
+        if (webcam.currentTime === lastVideoTime) return;
+        lastVideoTime = webcam.currentTime;
+
+        const result = poseLandmarker.detectForVideo(webcam, performance.now());
+
+        if (result.landmarks?.length) {
+          if (gameState === 'countdown') {
+            maxDetectedDuringCountdown = Math.max(
+              maxDetectedDuringCountdown,
+              result.landmarks.length
+            );
+          }
+          if (gameState === 'playing') {
+            checkCollisions(result.landmarks);
+          }
+          drawSkeleton(result.landmarks);
+        } else {
+          bodyCtx.clearRect(0, 0, bodyCanvas.width, bodyCanvas.height);
+        }
+      }
+      poseLoop();
+    }
+
+    // ── Start button ───────────────────────────────────────────────────────────
+    document.getElementById('startBtn').addEventListener('click', async () => {
+      getAudio(); // satisfy user-gesture requirement for AudioContext
+      startOverlay.style.display = 'none';
+      await initMediaPipe();
+    });
+  </script>
+</body>
+</html>

@@ -17,3 +17,4 @@ A few experimental projects.
 * [bbc-basic](https://experiments.andrewmcdonough.com/bbc-basic/): A BBC Micro BASIC interpreter in the browser — type and run classic BASIC programs
 * [game-of-life](https://experiments.andrewmcdonough.com/game-of-life/): Conway's Game of Life — paint cells, stamp classic patterns, and watch neon life evolve
 * [german-genders](https://experiments.andrewmcdonough.com/german-genders/): Learn the gender of German nouns — press space to reveal, or 1/2/3 to guess and track your score
+* [balloon-pop](https://experiments.andrewmcdonough.com/balloon-pop/): Body-tracking balloon game — pop floating balloons with any part of your body, 1 minute on the clock, 1 or 2 players
