@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Berlin Marathon</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #12161c; overflow: hidden; font-family: 'Courier New', monospace; }
+    canvas { display: block; position: fixed; top: 0; left: 0; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W, H, GY, PXPM, S;
+function resize() {
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  GY   = Math.round(H * 0.72);                          // where the road surface starts
+  PXPM = Math.min(0.80, Math.max(0.35, W / 2600));      // screen pixels per race metre
+  S    = Math.min(1.25, Math.max(0.55, H / 700));       // scenery scale
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ─── Race model ──────────────────────────────────────────────────────────────
+// The clock runs at TIME_SCALE × real time, so a full 42.195 km takes a couple
+// of minutes of hammering rather than a couple of hours.
+const DIST       = 42195;
+const TIME_SCALE = 90;
+const IMPULSE    = 0.9;    // m/s added per alternating key press
+const DECAY      = 1.6;    // speed lost per race-second, proportional to speed
+const MAX_SPEED  = 7.2;    // m/s
+const CRUISE     = 4.0;    // m/s you can hold forever (~2:56 marathon)
+const DRAIN      = 2.6;    // stamina/real-second at full tilt
+const REGEN      = 3.0;    // stamina/real-second when standing still
+const WALL_SPEED = 3.2;    // speed cap once you've hit the wall
+const CR_TIME    = 7269;   // Kipchoge's 2:01:09 course record, in seconds
+const CR_SPEED   = DIST / CR_TIME;
+
+const RUNNER_X = () => W * 0.28;
+const FOOT     = () => GY + (H - GY) * 0.52;
+
+const LANDMARKS = [
+  { km:  0.3, name: 'Siegessäule',            draw: drawSiegessaeule },
+  { km:  4.5, name: 'Schloss Charlottenburg', draw: drawSchloss },
+  { km: 11.0, name: 'Rathaus Schöneberg',     draw: drawRathaus },
+  { km: 17.0, name: 'Oberbaumbrücke',         draw: drawOberbaum },
+  { km: 24.0, name: 'Potsdamer Platz',        draw: drawPotsdamer },
+  { km: 30.0, name: 'Fernsehturm',            draw: drawFernsehturm },
+  { km: 34.0, name: 'Berliner Dom',           draw: drawDom },
+  { km: 38.5, name: 'Gendarmenmarkt',         draw: drawGendarmenmarkt },
+  { km: 41.7, name: 'Brandenburger Tor',      draw: drawBrandenburg },
+];
+
+// ─── State ───────────────────────────────────────────────────────────────────
+let phase, dist, speed, stamina, raceTime, ghostDist, lastKey, tapTimes,
+    wall, stride, messages, finishTime, nextDrink, flash;
+
+function reset() {
+  phase      = 'ready';
+  dist       = 0;
+  speed      = 0;
+  stamina    = 100;
+  raceTime   = 0;
+  ghostDist  = 0;
+  lastKey    = null;
+  tapTimes   = [];
+  wall       = false;
+  stride     = 0;
+  messages   = [];
+  finishTime = 0;
+  nextDrink  = 5000;
+  flash      = 0;
+}
+reset();
+
+function say(text, colour) {
+  messages.push({ text, colour: colour || '#ffd34d', life: 2.2 });
+}
+
+// ─── Input ───────────────────────────────────────────────────────────────────
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+
+  if (phase === 'finished') {
+    if (k === 'r' || k === 'enter') reset();
+    return;
+  }
+  if (k !== 'a' && k !== 's') return;
+  e.preventDefault();
+  if (e.repeat) return;                   // no holding the keys down
+
+  if (phase === 'ready') { phase = 'racing'; lastKey = null; }
+  if (k === lastKey) return;              // you have to alternate A / S
+
+  lastKey = k;
+  tapTimes.push(performance.now());
+  speed = Math.min(MAX_SPEED, speed + IMPULSE * (wall ? 0.45 : 1));
+  flash = 1;
+});
+
+// ─── Update ──────────────────────────────────────────────────────────────────
+function update(dt) {
+  const now = performance.now();
+  while (tapTimes.length && now - tapTimes[0] > 1500) tapTimes.shift();
+  flash = Math.max(0, flash - dt * 6);
+
+  for (const m of messages) m.life -= dt;
+  messages = messages.filter(m => m.life > 0);
+
+  if (phase !== 'racing') return;
+
+  const raceDt = dt * TIME_SCALE;
+  raceTime += raceDt;
+
+  speed = Math.max(0, speed - speed * DECAY * dt);
+  if (wall) speed = Math.min(speed, WALL_SPEED);
+
+  if (speed > CRUISE) {
+    stamina -= (speed - CRUISE) / (MAX_SPEED - CRUISE) * DRAIN * dt;
+  } else {
+    stamina += (CRUISE - speed) / CRUISE * REGEN * dt;
+  }
+  stamina = Math.min(100, stamina);
+
+  if (stamina <= 0) {
+    stamina = 0;
+    if (!wall) { wall = true; say('DIE MAUER! Ease off to recover', '#ff5f5f'); }
+  } else if (wall && stamina > 20) {
+    wall = false;
+    say('Back in the race!', '#7dffa0');
+  }
+
+  dist += speed * raceDt;
+  stride += speed * dt * 3.2;
+  ghostDist += CR_SPEED * raceDt;
+
+  if (dist >= nextDrink && nextDrink < DIST) {
+    stamina = Math.min(100, stamina + 10);
+    say('💧 Getränkestation — ' + (nextDrink / 1000) + ' km', '#8fd8ff');
+    nextDrink += 5000;
+  }
+
+  if (dist >= DIST) {
+    dist = DIST;
+    finishTime = raceTime;
+    phase = 'finished';
+  }
+}
+
+// ─── Drawing helpers ─────────────────────────────────────────────────────────
+function rr(x, y, w, h, col) { ctx.fillStyle = col; ctx.fillRect(x, y, w, h); }
+
+function windows(x, y, w, h, cols, rows, col) {
+  const gw = w / (cols * 2 + 1), gh = h / (rows * 2 + 1);
+  ctx.fillStyle = col;
+  for (let i = 0; i < cols; i++)
+    for (let j = 0; j < rows; j++)
+      ctx.fillRect(x + gw * (1 + i * 2), y + gh * (1 + j * 2), gw, gh);
+}
+
+function dome(cx, cy, r, col, lantern) {
+  ctx.fillStyle = col;
+  ctx.beginPath(); ctx.arc(cx, cy, r, Math.PI, 0); ctx.fill();
+  ctx.fillRect(cx - r, cy, r * 2, r * 0.18);
+  if (lantern) {
+    rr(cx - r * 0.22, cy - r * 1.45, r * 0.44, r * 0.45, col);
+    ctx.fillStyle = '#e8d9a8';
+    ctx.fillRect(cx - 1.5, cy - r * 1.9, 3, r * 0.5);
+    ctx.fillRect(cx - r * 0.16, cy - r * 1.72, r * 0.32, 3);
+  }
+}
+
+// x is the landmark's centre on screen, g is the ground line
+function drawSiegessaeule(x, g) {
+  const s = S;
+  rr(x - 40 * s, g - 34 * s, 80 * s, 34 * s, '#b8ac93');
+  rr(x - 30 * s, g - 56 * s, 60 * s, 24 * s, '#cdc1a6');
+  rr(x - 14 * s, g - 200 * s, 28 * s, 146 * s, '#ded2b5');
+  ctx.fillStyle = '#c8a93c';
+  for (let i = 0; i < 3; i++) ctx.fillRect(x - 15 * s, g - (90 + i * 36) * s, 30 * s, 7 * s);
+  rr(x - 22 * s, g - 214 * s, 44 * s, 16 * s, '#cdc1a6');
+  ctx.fillStyle = '#e0bb44';
+  ctx.beginPath();
+  ctx.arc(x, g - 232 * s, 7 * s, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(x - 3 * s, g - 228 * s, 6 * s, 16 * s);
+  ctx.beginPath();
+  ctx.moveTo(x - 2 * s, g - 226 * s);
+  ctx.lineTo(x - 24 * s, g - 244 * s);
+  ctx.lineTo(x - 4 * s, g - 214 * s);
+  ctx.closePath(); ctx.fill();
+}
+
+function drawSchloss(x, g) {
+  const s = S;
+  rr(x - 150 * s, g - 78 * s, 300 * s, 78 * s, '#e6c98f');
+  windows(x - 150 * s, g - 70 * s, 300 * s, 62 * s, 11, 2, '#7b6a4e');
+  rr(x - 42 * s, g - 108 * s, 84 * s, 108 * s, '#eed5a0');
+  windows(x - 42 * s, g - 100 * s, 84 * s, 80 * s, 3, 2, '#7b6a4e');
+  dome(x, g - 108 * s, 38 * s, '#5f9b86', true);
+  rr(x - 150 * s, g - 84 * s, 300 * s, 8 * s, '#d1ae74');
+}
+
+function drawRathaus(x, g) {
+  const s = S;
+  rr(x - 110 * s, g - 86 * s, 220 * s, 86 * s, '#9c5643');
+  windows(x - 110 * s, g - 80 * s, 220 * s, 70 * s, 8, 2, '#3d2a24');
+  rr(x - 30 * s, g - 196 * s, 60 * s, 118 * s, '#a85e49');
+  windows(x - 30 * s, g - 150 * s, 60 * s, 60 * s, 2, 2, '#3d2a24');
+  ctx.fillStyle = '#efe4c8';
+  ctx.beginPath(); ctx.arc(x, g - 172 * s, 15 * s, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#3d2a24'; ctx.lineWidth = 2 * s;
+  ctx.beginPath(); ctx.moveTo(x, g - 172 * s); ctx.lineTo(x, g - 182 * s);
+  ctx.moveTo(x, g - 172 * s); ctx.lineTo(x + 8 * s, g - 170 * s); ctx.stroke();
+  rr(x - 36 * s, g - 206 * s, 72 * s, 12 * s, '#7d4436');
+  rr(x - 2 * s, g - 232 * s, 4 * s, 26 * s, '#6b3a2e');
+}
+
+function drawOberbaum(x, g) {
+  const s = S;
+  const deck = g - 46 * s;
+  rr(x - 190 * s, deck, 380 * s, 14 * s, '#8d5140');
+  ctx.strokeStyle = '#8d5140'; ctx.lineWidth = 6 * s;
+  for (const off of [-125, 0, 125]) {
+    ctx.beginPath();
+    ctx.arc(x + off * s, deck + 14 * s, 56 * s, Math.PI, 0);
+    ctx.stroke();
+  }
+  for (const off of [-64, 64]) {
+    rr(x + off * s - 20 * s, deck - 96 * s, 40 * s, 96 * s, '#a3604b');
+    windows(x + off * s - 20 * s, deck - 84 * s, 40 * s, 60 * s, 2, 3, '#3d2a24');
+    ctx.fillStyle = '#6f3b2d';
+    ctx.beginPath();
+    ctx.moveTo(x + off * s - 24 * s, deck - 96 * s);
+    ctx.lineTo(x + off * s, deck - 142 * s);
+    ctx.lineTo(x + off * s + 24 * s, deck - 96 * s);
+    ctx.closePath(); ctx.fill();
+  }
+  rr(x - 190 * s, deck + 66 * s, 380 * s, (g - deck - 66 * s) + 4, '#5d7f96');
+}
+
+function drawPotsdamer(x, g) {
+  const s = S;
+  rr(x - 150 * s, g - 190 * s, 74 * s, 190 * s, '#7a4b3f');
+  windows(x - 150 * s, g - 182 * s, 74 * s, 170 * s, 4, 8, '#e8cf8d');
+  ctx.fillStyle = '#7a4b3f';
+  ctx.beginPath();
+  ctx.moveTo(x - 150 * s, g - 190 * s);
+  ctx.lineTo(x - 113 * s, g - 228 * s);
+  ctx.lineTo(x - 76 * s, g - 190 * s);
+  ctx.closePath(); ctx.fill();
+
+  rr(x - 58 * s, g - 230 * s, 66 * s, 230 * s, '#6d8ba0');
+  windows(x - 58 * s, g - 222 * s, 66 * s, 210 * s, 4, 10, '#cfe6f2');
+
+  rr(x + 30 * s, g - 150 * s, 110 * s, 150 * s, '#8aa3b5');
+  windows(x + 30 * s, g - 142 * s, 110 * s, 130 * s, 6, 6, '#e3f1f8');
+  ctx.strokeStyle = '#dfe9ee'; ctx.lineWidth = 3 * s;
+  ctx.beginPath();
+  ctx.moveTo(x + 24 * s, g - 150 * s);
+  ctx.lineTo(x + 85 * s, g - 196 * s);
+  ctx.lineTo(x + 146 * s, g - 150 * s);
+  ctx.stroke();
+}
+
+function drawFernsehturm(x, g) {
+  const s = S;
+  rr(x - 70 * s, g - 40 * s, 140 * s, 40 * s, '#b9c3cb');
+  windows(x - 70 * s, g - 34 * s, 140 * s, 28 * s, 7, 1, '#4d6070');
+  ctx.fillStyle = '#d7dee4';
+  ctx.beginPath();
+  ctx.moveTo(x - 20 * s, g - 40 * s);
+  ctx.lineTo(x - 8 * s, g - 268 * s);
+  ctx.lineTo(x + 8 * s, g - 268 * s);
+  ctx.lineTo(x + 20 * s, g - 40 * s);
+  ctx.closePath(); ctx.fill();
+  const cy = g - 300 * s, r = 34 * s;
+  ctx.fillStyle = '#c3ccd4';
+  ctx.beginPath(); ctx.arc(x, cy, r, 0, Math.PI * 2); ctx.fill();
+  rr(x - r, cy - 6 * s, r * 2, 12 * s, '#5c6f7e');
+  ctx.fillStyle = '#e9556b';
+  ctx.beginPath(); ctx.arc(x - r * 0.35, cy - r * 0.42, r * 0.28, 0, Math.PI * 2); ctx.fill();
+  rr(x - 5 * s, g - 344 * s, 10 * s, 44 * s, '#d7dee4');
+  for (let i = 0; i < 7; i++)
+    rr(x - 3 * s, g - (344 + i * 14) * s, 6 * s, 14 * s, i % 2 ? '#e8e8e8' : '#e05555');
+  rr(x - 1.5 * s, g - 460 * s, 3 * s, 20 * s, '#cfd6dc');
+}
+
+function drawDom(x, g) {
+  const s = S;
+  rr(x - 120 * s, g - 110 * s, 240 * s, 110 * s, '#d8c9a8');
+  windows(x - 120 * s, g - 100 * s, 240 * s, 84 * s, 7, 2, '#7a6a50');
+  for (const off of [-96, 96]) {
+    rr(x + off * s - 24 * s, g - 150 * s, 48 * s, 42 * s, '#e2d4b3');
+    dome(x + off * s, g - 150 * s, 24 * s, '#63a08a', false);
+  }
+  rr(x - 58 * s, g - 158 * s, 116 * s, 50 * s, '#e2d4b3');
+  dome(x, g - 158 * s, 58 * s, '#5f9b86', true);
+}
+
+function drawGendarmenmarkt(x, g) {
+  const s = S;
+  rr(x - 60 * s, g - 74 * s, 120 * s, 74 * s, '#ddd0b4');
+  ctx.fillStyle = '#c9bb9c';
+  ctx.beginPath();
+  ctx.moveTo(x - 62 * s, g - 74 * s);
+  ctx.lineTo(x, g - 104 * s);
+  ctx.lineTo(x + 62 * s, g - 74 * s);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#c0b294';
+  for (let i = -2; i <= 2; i++) ctx.fillRect(x + i * 20 * s - 4 * s, g - 70 * s, 8 * s, 70 * s);
+  for (const off of [-130, 130]) {
+    rr(x + off * s - 34 * s, g - 96 * s, 68 * s, 96 * s, '#ded1b5');
+    windows(x + off * s - 34 * s, g - 88 * s, 68 * s, 66 * s, 2, 2, '#7a6a50');
+    rr(x + off * s - 26 * s, g - 128 * s, 52 * s, 34 * s, '#e6dabe');
+    dome(x + off * s, g - 128 * s, 26 * s, '#67a48d', true);
+  }
+}
+
+function drawBrandenburg(x, g) {
+  const s = S;
+  rr(x - 140 * s, g - 20 * s, 280 * s, 20 * s, '#cbbfa4');
+  ctx.fillStyle = '#e0d5ba';
+  for (let i = 0; i < 6; i++) ctx.fillRect(x - 130 * s + i * 48 * s, g - 150 * s, 20 * s, 132 * s);
+  rr(x - 148 * s, g - 178 * s, 296 * s, 30 * s, '#e8dfc6');
+  rr(x - 148 * s, g - 186 * s, 296 * s, 10 * s, '#d5c9ac');
+  rr(x - 60 * s, g - 200 * s, 120 * s, 16 * s, '#cfc3a6');
+  // quadriga
+  ctx.fillStyle = '#4f6c5c';
+  ctx.fillRect(x - 30 * s, g - 214 * s, 16 * s, 14 * s);
+  for (let i = 0; i < 4; i++) {
+    const hx = x - 6 * s + i * 13 * s;
+    ctx.fillRect(hx, g - 218 * s, 11 * s, 10 * s);
+    ctx.fillRect(hx + 8 * s, g - 224 * s, 6 * s, 8 * s);
+    ctx.fillRect(hx + 1 * s, g - 208 * s, 3 * s, 8 * s);
+    ctx.fillRect(hx + 7 * s, g - 208 * s, 3 * s, 8 * s);
+  }
+  ctx.fillRect(x - 26 * s, g - 232 * s, 7 * s, 20 * s);
+  ctx.beginPath(); ctx.arc(x - 22.5 * s, g - 236 * s, 5 * s, 0, Math.PI * 2); ctx.fill();
+}
+
+// Ordinary Altbau block used to fill the gaps between the sights
+function drawBlock(x, g, seed) {
+  const s = S;
+  const rnd = n => ((Math.sin(seed * 12.9898 + n * 78.233) * 43758.5453) % 1 + 1) % 1;
+  const w = (90 + rnd(1) * 90) * s;
+  const h = (70 + rnd(2) * 110) * s;
+  const cols = ['#b9a68c', '#a99a86', '#c6b39a', '#9f9484', '#bfa892'];
+  rr(x - w / 2, g - h, w, h, cols[Math.floor(rnd(3) * cols.length)]);
+  windows(x - w / 2, g - h + 6 * s, w, h - 12 * s, Math.round(2 + rnd(4) * 3), Math.round(2 + rnd(5) * 3), '#6c6154');
+  rr(x - w / 2 - 4 * s, g - h - 6 * s, w + 8 * s, 8 * s, '#7d6f5f');
+}
+
+// ─── Scene ───────────────────────────────────────────────────────────────────
+function sky() {
+  const grd = ctx.createLinearGradient(0, 0, 0, GY);
+  grd.addColorStop(0, '#2f6ea8');
+  grd.addColorStop(0.55, '#7db3d8');
+  grd.addColorStop(1, '#e4cfae');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, W, GY);
+  ctx.fillStyle = 'rgba(255,246,214,0.9)';
+  ctx.beginPath(); ctx.arc(W * 0.78, GY * 0.22, 34 * S, 0, Math.PI * 2); ctx.fill();
+}
+
+function skyline(scroll) {
+  const off = scroll * 0.18;
+  ctx.fillStyle = 'rgba(70,96,120,0.45)';
+  const step = 70 * S;
+  const start = Math.floor(off / step) - 1;
+  for (let i = start; i < start + W / step + 3; i++) {
+    const r = ((Math.sin(i * 45.31) * 4671.5) % 1 + 1) % 1;
+    const h = (40 + r * 90) * S;
+    const x = i * step - off;
+    ctx.fillRect(x, GY - h, step * 0.85, h);
+  }
+}
+
+function crowd(scroll) {
+  const step = 16 * S;
+  const off = scroll % step;
+  const skin = ['#e8b98f', '#c98d63', '#8d5c3c', '#f0cfae'];
+  const tops = ['#d94f4f', '#4f7fd9', '#4fd98a', '#f2c94c', '#d94fbf', '#ffffff', '#333a44'];
+  for (let i = -1; i < W / step + 2; i++) {
+    const x = i * step - off;
+    const n = Math.floor((scroll - off) / step) + i;
+    const r = ((Math.sin(n * 91.7) * 9721.3) % 1 + 1) % 1;
+    const r2 = ((Math.sin(n * 31.1) * 3311.7) % 1 + 1) % 1;
+    const bob = Math.sin(stride * 1.4 + n) * 2 * S;
+    const hh = (26 + r * 8) * S;
+    rr(x, GY - hh + bob, 11 * S, hh - 9 * S, tops[Math.floor(r2 * tops.length)]);
+    ctx.fillStyle = skin[Math.floor(r * skin.length)];
+    ctx.beginPath(); ctx.arc(x + 5.5 * S, GY - hh - 4 * S + bob, 5 * S, 0, Math.PI * 2); ctx.fill();
+    if (r2 > 0.93) {  // German flag
+      rr(x + 10 * S, GY - hh - 26 * S + bob, 2 * S, 24 * S, '#6b5b4a');
+      rr(x + 12 * S, GY - hh - 26 * S + bob, 16 * S, 4 * S, '#111');
+      rr(x + 12 * S, GY - hh - 22 * S + bob, 16 * S, 4 * S, '#d7141a');
+      rr(x + 12 * S, GY - hh - 18 * S + bob, 16 * S, 4 * S, '#ffce00');
+    }
+  }
+  // barrier
+  rr(0, GY - 8 * S, W, 3 * S, '#dfe4e8');
+  ctx.fillStyle = '#c3cad1';
+  for (let x = -(scroll % (22 * S)); x < W; x += 22 * S) ctx.fillRect(x, GY - 8 * S, 2.5 * S, 8 * S);
+}
+
+function road(scroll) {
+  const grd = ctx.createLinearGradient(0, GY, 0, H);
+  grd.addColorStop(0, '#9c4a36');
+  grd.addColorStop(1, '#c2604a');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, GY, W, H - GY);
+  rr(0, GY, W, 5 * S, '#e9e4dc');
+
+  const depth = H - GY;
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  for (const f of [0.28, 0.52, 0.78]) {
+    const y = GY + depth * f;
+    const dash = 46 * S, gap = 34 * S;
+    for (let x = -(scroll % (dash + gap)); x < W; x += dash + gap) {
+      ctx.fillRect(x, y, dash, 2.5 * S);
+    }
+  }
+}
+
+function roadFurniture(scroll) {
+  // kilometre boards and drink stations, positioned in race metres
+  const from = dist - RUNNER_X() / PXPM;
+  const to   = from + W / PXPM;
+  for (let km = Math.max(1, Math.floor(from / 1000)); km <= Math.min(42, Math.ceil(to / 1000)); km++) {
+    const x = (km * 1000 - dist) * PXPM + RUNNER_X();
+    if (x < -60 || x > W + 60) continue;
+    rr(x - 1.5 * S, GY - 34 * S, 3 * S, 30 * S, '#4a5560');
+    rr(x - 15 * S, GY - 54 * S, 30 * S, 22 * S, '#1d3f8f');
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold ' + Math.round(12 * S) + 'px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText(km, x, GY - 38 * S);
+    if (km % 5 === 0) {
+      const tx = x + 40 * S;
+      rr(tx, GY + (H - GY) * 0.1, 56 * S, 5 * S, '#e8e8e8');
+      rr(tx + 3 * S, GY + (H - GY) * 0.1 + 5 * S, 3 * S, 14 * S, '#cfcfcf');
+      rr(tx + 50 * S, GY + (H - GY) * 0.1 + 5 * S, 3 * S, 14 * S, '#cfcfcf');
+      ctx.fillStyle = '#8fd8ff';
+      for (let i = 0; i < 5; i++) ctx.fillRect(tx + (4 + i * 10) * S, GY + (H - GY) * 0.1 - 6 * S, 6 * S, 6 * S);
+    }
+  }
+  // finish line
+  const fx = (DIST - dist) * PXPM + RUNNER_X();
+  if (fx > -40 && fx < W + 40) {
+    const sq = 11 * S;
+    for (let y = GY; y < H; y += sq) {
+      for (let i = 0; i < 3; i++) {
+        ctx.fillStyle = ((Math.floor(y / sq) + i) % 2) ? '#111' : '#fff';
+        ctx.fillRect(fx + i * sq - sq, y, sq, sq);
+      }
+    }
+  }
+}
+
+function scenery() {
+  const scroll = dist * PXPM;
+  // background buildings between the landmarks
+  const spacing = 220;  // race metres between filler blocks
+  const from = dist - RUNNER_X() / PXPM - spacing;
+  const to   = from + W / PXPM + spacing * 2;
+  for (let n = Math.floor(from / spacing); n <= Math.ceil(to / spacing); n++) {
+    const m = n * spacing;
+    if (LANDMARKS.some(l => Math.abs(l.km * 1000 - m) < 320)) continue;
+    drawBlock((m - dist) * PXPM + RUNNER_X(), GY - 6 * S, n);
+  }
+  for (const l of LANDMARKS) {
+    const x = (l.km * 1000 - dist) * PXPM + RUNNER_X();
+    if (x < -400 * S || x > W + 400 * S) continue;
+    l.draw(x, GY - 6 * S);
+    const near = 1 - Math.min(1, Math.abs(x - RUNNER_X()) / (W * 0.45));
+    if (near > 0) {
+      ctx.globalAlpha = near;
+      ctx.fillStyle = '#12303f';
+      ctx.font = 'bold ' + Math.round(15 * S) + 'px Courier New';
+      ctx.textAlign = 'center';
+      ctx.fillText(l.name.toUpperCase(), W / 2, H * 0.16);
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
+// ─── Runner ──────────────────────────────────────────────────────────────────
+function drawRunner(x, phaseOff, v, kit, alpha) {
+  const h  = Math.min(200, (H - GY) * 1.1);   // head-to-toe height
+  const L  = h * 0.235;                       // thigh = shin length
+  const t  = stride + phaseOff;
+  const lean = 0.10 + Math.min(0.26, v / MAX_SPEED * 0.26);
+
+  // One leg, as offsets from the hip. The knee always bends backwards.
+  function leg(p) {
+    const thigh = 0.85 * Math.sin(p);
+    const bend  = 0.15 + 0.75 * (1 - Math.cos(p - 1.2));
+    const shin  = thigh - bend;
+    const kx = Math.sin(thigh) * L, ky = Math.cos(thigh) * L;
+    return { kx, ky, fx: kx + Math.sin(shin) * L, fy: ky + Math.cos(shin) * L };
+  }
+
+  const near = leg(t), far = leg(t + Math.PI);
+  // Hang the hips so the lower foot rests on the road — that gives the bounce.
+  const hipY = FOOT() - Math.max(near.fy, far.fy);
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(x, 0);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  ctx.fillStyle = 'rgba(80,30,20,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(0, FOOT() + 4, h * 0.19, h * 0.035, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  const drawLeg = (lg, col) => {
+    ctx.strokeStyle = col;
+    ctx.lineWidth = h * 0.06;
+    ctx.beginPath();
+    ctx.moveTo(0, hipY);
+    ctx.lineTo(lg.kx, hipY + lg.ky);
+    ctx.lineTo(lg.fx, hipY + lg.fy);
+    ctx.stroke();
+    ctx.fillStyle = kit.shoe;
+    ctx.fillRect(lg.fx - h * 0.025, hipY + lg.fy - h * 0.018, h * 0.085, h * 0.036);
+  };
+
+  const shoulder = { x: lean * h * 0.36, y: hipY - h * 0.30 };
+  const drawArm = (p, col) => {
+    const up = -0.9 * Math.sin(p), fore = up - 1.5;
+    const ex = shoulder.x + Math.sin(up) * h * 0.17;
+    const ey = shoulder.y + Math.cos(up) * h * 0.17;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = h * 0.048;
+    ctx.beginPath();
+    ctx.moveTo(shoulder.x, shoulder.y);
+    ctx.lineTo(ex, ey);
+    ctx.lineTo(ex + Math.sin(fore) * h * 0.15, ey + Math.cos(fore) * h * 0.15);
+    ctx.stroke();
+  };
+
+  drawLeg(far, kit.dark);
+  drawArm(t, kit.dark);
+
+  // torso
+  ctx.strokeStyle = kit.vest;
+  ctx.lineWidth = h * 0.15;
+  ctx.beginPath();
+  ctx.moveTo(0, hipY);
+  ctx.lineTo(shoulder.x, shoulder.y);
+  ctx.stroke();
+  ctx.fillStyle = kit.short;
+  ctx.fillRect(-h * 0.07, hipY - h * 0.03, h * 0.14, h * 0.09);
+  ctx.fillStyle = kit.bib;
+  ctx.fillRect(shoulder.x * 0.5 - h * 0.035, hipY - h * 0.17, h * 0.07, h * 0.055);
+
+  // head
+  const hx = shoulder.x + lean * h * 0.2, hy = shoulder.y - h * 0.10;
+  ctx.fillStyle = kit.skin;
+  ctx.beginPath(); ctx.arc(hx, hy, h * 0.068, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = kit.hair;
+  ctx.beginPath(); ctx.arc(hx, hy - h * 0.012, h * 0.068, Math.PI * 1.02, Math.PI * 2.05); ctx.fill();
+
+  drawLeg(near, kit.skin);
+  drawArm(t + Math.PI, kit.skin);
+
+  ctx.restore();
+}
+
+const KIT_YOU   = { skin: '#e8b98f', dark: '#c48f68', vest: '#e2b13a', short: '#1c1c22', shoe: '#ff4d6d', hair: '#3a2b22', bib: '#fdfaf2' };
+const KIT_GHOST = { skin: '#dfe9f2', dark: '#c3d2e0', vest: '#9fb6cc', short: '#8fa4b8', shoe: '#e6eef5', hair: '#b9c8d6', bib: '#eef4f9' };
+
+// ─── HUD ─────────────────────────────────────────────────────────────────────
+function clock(sec) {
+  const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = Math.floor(sec) % 60;
+  return h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+}
+function pace(v) {
+  if (v < 0.4) return '--:--';
+  const sp = 1000 / v;
+  return Math.floor(sp / 60) + ':' + String(Math.round(sp % 60)).padStart(2, '0');
+}
+
+function panel(x, y, w, h) {
+  ctx.fillStyle = 'rgba(14,20,28,0.72)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+}
+
+function hud() {
+  const f = Math.round(13 * Math.min(1.3, W / 1100) + 4);
+  ctx.textAlign = 'left';
+
+  panel(16, 16, 250, 96);
+  ctx.fillStyle = '#ffd34d';
+  ctx.font = 'bold ' + f + 'px Courier New';
+  ctx.fillText((dist / 1000).toFixed(2) + ' km', 30, 44);
+  ctx.fillStyle = '#e6eef5';
+  ctx.font = f - 2 + 'px Courier New';
+  ctx.fillText('ZEIT  ' + clock(raceTime), 30, 44 + f + 4);
+  ctx.fillText('TEMPO ' + pace(speed) + ' /km   ' + (speed * 3.6).toFixed(1) + ' km/h', 30, 44 + (f + 4) * 2);
+
+  // stamina
+  const bw = 250, bx = 16, by = 124;
+  panel(bx, by, bw, 34);
+  const frac = stamina / 100;
+  const col = wall ? '#ff5f5f' : frac > 0.5 ? '#7dffa0' : frac > 0.22 ? '#ffd34d' : '#ff9a4d';
+  ctx.fillStyle = col;
+  ctx.fillRect(bx + 8, by + 8, (bw - 16) * frac, 18);
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.font = 'bold 12px Courier New';
+  ctx.fillText('KRAFT', bx + 14, by + 22);
+
+  // cadence
+  const taps = (tapTimes.length / 1.5).toFixed(1);
+  panel(W - 216, 16, 200, 68);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#e6eef5';
+  ctx.font = 'bold ' + f + 'px Courier New';
+  ctx.fillText(taps + ' /s TAKT', W - 30, 44);
+  const gap = (dist - ghostDist) / Math.max(CR_SPEED, 0.1);
+  ctx.font = f - 3 + 'px Courier New';
+  ctx.fillStyle = gap >= 0 ? '#7dffa0' : '#ff9a9a';
+  ctx.fillText((gap >= 0 ? '+' : '−') + clock(Math.abs(gap)).slice(2) + ' vs CR', W - 30, 44 + f);
+
+  // route progress
+  const pw = W - 32, px = 16, py = H - 34;
+  panel(px, py, pw, 20);
+  ctx.fillStyle = 'rgba(226,177,58,0.85)';
+  ctx.fillRect(px + 4, py + 4, (pw - 8) * (dist / DIST), 12);
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  for (const l of LANDMARKS) ctx.fillRect(px + 4 + (pw - 8) * (l.km * 1000 / DIST), py + 2, 1.5, 16);
+  ctx.fillStyle = '#cfe6f2';
+  ctx.fillRect(px + 4 + (pw - 8) * Math.min(1, ghostDist / DIST), py + 2, 2.5, 16);
+
+  ctx.textAlign = 'center';
+  let my = H * 0.3;
+  for (const m of messages) {
+    ctx.globalAlpha = Math.min(1, m.life);
+    ctx.fillStyle = m.colour;
+    ctx.font = 'bold ' + (f + 4) + 'px Courier New';
+    ctx.fillText(m.text, W / 2, my);
+    ctx.globalAlpha = 1;
+    my += f + 12;
+  }
+}
+
+function keyCap(x, y, label, lit) {
+  const s = 54;
+  ctx.fillStyle = lit ? '#ffd34d' : 'rgba(255,255,255,0.14)';
+  ctx.fillRect(x - s / 2, y, s, s);
+  ctx.strokeStyle = '#ffd34d'; ctx.lineWidth = 2;
+  ctx.strokeRect(x - s / 2, y, s, s);
+  ctx.fillStyle = lit ? '#12161c' : '#ffd34d';
+  ctx.font = 'bold 26px Courier New';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, x, y + 36);
+}
+
+function overlayReady() {
+  ctx.fillStyle = 'rgba(10,14,20,0.45)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd34d';
+  ctx.font = 'bold ' + Math.round(Math.min(64, W / 14)) + 'px Courier New';
+  ctx.fillText('BERLIN MARATHON', W / 2, H * 0.28);
+  ctx.fillStyle = '#e6eef5';
+  ctx.font = Math.round(Math.min(22, W / 42)) + 'px Courier New';
+  ctx.fillText('42,195 km · Straße des 17. Juni → Brandenburger Tor', W / 2, H * 0.28 + 38);
+  ctx.fillText('Hammer A and S alternately — the faster you alternate, the faster you run', W / 2, H * 0.28 + 74);
+  ctx.fillStyle = '#8fd8ff';
+  ctx.fillText('Above ' + pace(CRUISE) + ' /km you burn KRAFT. Empty = die Mauer. Drinks every 5 km.', W / 2, H * 0.28 + 106);
+  keyCap(W / 2 - 40, H * 0.52, 'A', lastKey === 'a');
+  keyCap(W / 2 + 40, H * 0.52, 'S', lastKey === 's');
+  ctx.fillStyle = '#ffd34d';
+  ctx.font = 'bold 20px Courier New';
+  ctx.fillText('press A or S to start', W / 2, H * 0.52 + 96);
+}
+
+function overlayFinish() {
+  ctx.fillStyle = 'rgba(10,14,20,0.74)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd34d';
+  ctx.font = 'bold ' + Math.round(Math.min(56, W / 16)) + 'px Courier New';
+  ctx.fillText('ZIEL!', W / 2, H * 0.26);
+  ctx.fillStyle = '#e6eef5';
+  ctx.font = 'bold ' + Math.round(Math.min(44, W / 20)) + 'px Courier New';
+  ctx.fillText(clock(finishTime), W / 2, H * 0.26 + 62);
+  ctx.font = Math.round(Math.min(20, W / 46)) + 'px Courier New';
+  ctx.fillText('average pace ' + pace(DIST / finishTime) + ' /km', W / 2, H * 0.26 + 100);
+
+  const diff = finishTime - CR_TIME;
+  ctx.fillStyle = diff <= 0 ? '#7dffa0' : '#ff9a9a';
+  ctx.fillText(diff <= 0
+      ? 'Course record beaten by ' + clock(-diff).slice(2)
+      : clock(diff).slice(2) + ' behind the 2:01:09 course record',
+    W / 2, H * 0.26 + 132);
+
+  const verdict =
+    finishTime < CR_TIME        ? 'Weltklasse. Berlin is yours.' :
+    finishTime < 2.5 * 3600     ? 'Elite field finish — impressive hands.' :
+    finishTime < 3.5 * 3600     ? 'Solid club runner. Good pacing.' :
+    finishTime < 5 * 3600       ? 'You finished, and that counts.' :
+                                  'Sightseeing tour of Berlin. Respect.';
+  ctx.fillStyle = '#8fd8ff';
+  ctx.fillText(verdict, W / 2, H * 0.26 + 172);
+  ctx.fillStyle = '#ffd34d';
+  ctx.font = 'bold 20px Courier New';
+  ctx.fillText('R = nochmal laufen', W / 2, H * 0.26 + 216);
+}
+
+// ─── Loop ────────────────────────────────────────────────────────────────────
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  update(dt);
+
+  sky();
+  const scroll = dist * PXPM;
+  skyline(scroll);
+  scenery();
+  crowd(scroll);
+  road(scroll);
+  roadFurniture(scroll);
+
+  const gx = (ghostDist - dist) * PXPM + RUNNER_X();
+  if (phase !== 'ready' && gx > -120 && gx < W + 120) drawRunner(gx, 1.7, CR_SPEED, KIT_GHOST, 0.5);
+  drawRunner(RUNNER_X(), 0, speed, KIT_YOU, 1);
+
+  if (flash > 0) {
+    ctx.fillStyle = 'rgba(255,211,77,' + (flash * 0.08) + ')';
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  hud();
+  if (phase === 'ready')    overlayReady();
+  if (phase === 'finished') overlayFinish();
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
