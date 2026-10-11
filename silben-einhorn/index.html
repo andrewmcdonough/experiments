@@ -1,0 +1,1166 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Silben-Einhorn</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Andika:wght@400;700&family=Fredoka:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --onset: #ff4f9a;
+      --vowel: #7a4dff;
+      --coda: #10b39b;
+      --gold: #ffc93c;
+      --cell-h: clamp(84px, 15vh, 128px);
+    }
+
+    html, body { height: 100%; }
+
+    body {
+      font-family: 'Fredoka', system-ui, sans-serif;
+      color: #4a2a6a;
+      background: linear-gradient(180deg, #bfe6ff 0%, #e6dcff 45%, #ffe1f0 100%);
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* ---------- Sky ---------- */
+    #sky { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+
+    .rainbow {
+      position: absolute;
+      left: 50%;
+      bottom: -62vmin;
+      width: 150vmin;
+      height: 150vmin;
+      transform: translateX(-50%);
+      border-radius: 50%;
+      background: radial-gradient(circle,
+        transparent 0 47%,
+        rgba(160, 110, 255, .55) 47% 50%,
+        rgba(90, 150, 255, .55) 50% 53%,
+        rgba(70, 210, 170, .55) 53% 56%,
+        rgba(255, 225, 80, .6) 56% 59%,
+        rgba(255, 160, 70, .6) 59% 62%,
+        rgba(255, 90, 120, .6) 62% 65%,
+        transparent 65%);
+      filter: blur(2px);
+    }
+
+    .cloud {
+      position: absolute;
+      width: 180px;
+      height: 56px;
+      background: #fff;
+      border-radius: 60px;
+      opacity: .9;
+      filter: drop-shadow(0 6px 10px rgba(120, 90, 180, .12));
+      animation: drift linear infinite;
+    }
+    .cloud::before, .cloud::after {
+      content: '';
+      position: absolute;
+      background: #fff;
+      border-radius: 50%;
+    }
+    .cloud::before { width: 80px; height: 80px; left: 28px; top: -40px; }
+    .cloud::after { width: 60px; height: 60px; left: 90px; top: -28px; }
+
+    @keyframes drift {
+      from { transform: translateX(-260px) scale(var(--s, 1)); }
+      to { transform: translateX(calc(100vw + 260px)) scale(var(--s, 1)); }
+    }
+
+    .twinkle {
+      position: absolute;
+      color: #fff;
+      font-size: 18px;
+      text-shadow: 0 0 8px #fff, 0 0 14px #ffd6f5;
+      animation: twinkle 3s ease-in-out infinite;
+    }
+    @keyframes twinkle {
+      0%, 100% { opacity: .15; transform: scale(.6) rotate(0); }
+      50% { opacity: 1; transform: scale(1.1) rotate(30deg); }
+    }
+
+    /* ---------- Top bar ---------- */
+    #topbar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px;
+      gap: 12px;
+      z-index: 5;
+    }
+
+    #stars {
+      display: flex;
+      gap: 4px;
+      background: rgba(255, 255, 255, .7);
+      padding: 6px 12px;
+      border-radius: 999px;
+      box-shadow: 0 4px 14px rgba(120, 80, 180, .15);
+      align-items: center;
+    }
+    .star-slot {
+      font-size: 22px;
+      line-height: 1;
+      color: #e3d6f5;
+      transition: transform .3s;
+    }
+    .star-slot.filled {
+      color: var(--gold);
+      text-shadow: 0 0 8px rgba(255, 200, 60, .8);
+      animation: pop .45s cubic-bezier(.3, 1.8, .5, 1);
+    }
+    #rainbow-count {
+      margin-left: 8px;
+      font-weight: 700;
+      font-size: 18px;
+      color: #7a4dff;
+      white-space: nowrap;
+    }
+
+    .icon-btn {
+      border: none;
+      background: rgba(255, 255, 255, .75);
+      width: 46px; height: 46px;
+      border-radius: 50%;
+      font-size: 22px;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(120, 80, 180, .15);
+      transition: transform .15s;
+    }
+    .icon-btn:hover { transform: scale(1.08); }
+    .icon-btn:active { transform: scale(.94); }
+    #buttons-right { display: flex; gap: 10px; }
+
+    /* ---------- Stage ---------- */
+    #stage {
+      position: relative;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 70px 16px 16px;
+      gap: 14px;
+    }
+
+    h1 {
+      font-size: clamp(28px, 5vw, 46px);
+      font-weight: 700;
+      letter-spacing: .02em;
+      background: linear-gradient(90deg, #ff4f9a, #ff9a3c, #ffc93c, #3ccf9a, #4a9cff, #a35cff);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      filter: drop-shadow(0 3px 0 #fff) drop-shadow(0 6px 10px rgba(120, 80, 180, .25));
+      margin-bottom: 64px;
+    }
+
+    /* ---------- Machine ---------- */
+    #machine-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    #machine {
+      position: relative;
+      width: min(88vw, 600px);
+      padding: 70px 26px 26px;
+      border-radius: 42px;
+      background:
+        linear-gradient(160deg, rgba(255, 255, 255, .7), rgba(255, 255, 255, 0) 40%),
+        linear-gradient(135deg, #ffb6dc 0%, #d9b8ff 50%, #a9d4ff 100%);
+      box-shadow:
+        inset 0 0 0 6px rgba(255, 255, 255, .7),
+        inset 0 -10px 20px rgba(120, 60, 180, .2),
+        0 0 0 6px var(--gold),
+        0 18px 40px rgba(120, 60, 180, .35);
+    }
+
+    #crest {
+      position: absolute;
+      left: 50%;
+      top: -96px;
+      width: 170px;
+      transform: translateX(-50%);
+      filter: drop-shadow(0 6px 8px rgba(120, 60, 180, .3));
+      animation: bob 3s ease-in-out infinite;
+    }
+    @keyframes bob {
+      0%, 100% { transform: translateX(-50%) translateY(0); }
+      50% { transform: translateX(-50%) translateY(-6px); }
+    }
+
+    #bulbs {
+      position: absolute;
+      top: 22px; left: 40px; right: 40px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .bulb {
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: var(--c);
+      box-shadow: 0 0 6px var(--c);
+      opacity: .45;
+    }
+    #machine.spinning .bulb { animation: blink .5s infinite alternate; }
+    #machine.won .bulb { animation: blink .18s infinite alternate; }
+    .bulb:nth-child(even) { animation-delay: .25s !important; }
+    @keyframes blink {
+      from { opacity: .35; }
+      to { opacity: 1; box-shadow: 0 0 14px var(--c), 0 0 4px #fff; }
+    }
+
+    #reels {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      padding: 14px;
+      border-radius: 28px;
+      background: rgba(255, 255, 255, .45);
+      box-shadow: inset 0 4px 12px rgba(100, 40, 160, .25);
+    }
+
+    .reel-col { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+
+    .reel-label {
+      font-size: 15px;
+      font-weight: 600;
+      color: #fff;
+      padding: 2px 12px;
+      border-radius: 999px;
+      background: var(--c);
+      box-shadow: 0 2px 0 rgba(0, 0, 0, .1);
+    }
+
+    .reel {
+      position: relative;
+      width: 100%;
+      height: var(--cell-h);
+      overflow: hidden;
+      border-radius: 20px;
+      background: linear-gradient(180deg, #f3ecff 0%, #fff 22%, #fff 78%, #f3ecff 100%);
+      box-shadow: inset 0 0 0 4px var(--c), inset 0 8px 14px rgba(80, 30, 140, .2), inset 0 -8px 14px rgba(80, 30, 140, .2);
+    }
+    .reel::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(255, 255, 255, .8), transparent 25%, transparent 75%, rgba(255, 255, 255, .8));
+      pointer-events: none;
+    }
+    .reel.landed { animation: land .35s ease-out; }
+    @keyframes land {
+      0% { transform: scale(1); }
+      40% { transform: scale(1.06); }
+      100% { transform: scale(1); }
+    }
+
+    .strip { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
+    .cell {
+      height: var(--cell-h);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Andika', 'Fredoka', sans-serif;
+      font-weight: 700;
+      font-size: calc(var(--cell-h) * .6);
+      color: var(--c);
+    }
+    .cell.blank { color: #d6c6f0; font-size: calc(var(--cell-h) * .4); }
+
+    /* ---------- Lever ---------- */
+    #lever {
+      position: relative;
+      width: 60px;
+      height: 220px;
+      margin-left: 6px;
+      cursor: pointer;
+    }
+    #lever-base {
+      position: absolute;
+      left: 0; bottom: 30px;
+      width: 34px; height: 70px;
+      border-radius: 0 18px 18px 0;
+      background: linear-gradient(180deg, #ffd96a, #f0a91a);
+      box-shadow: inset 0 -4px 0 rgba(0, 0, 0, .12);
+    }
+    #lever-arm {
+      position: absolute;
+      left: 14px; bottom: 65px;
+      width: 12px; height: 140px;
+      transform-origin: 50% 100%;
+      transition: transform .5s cubic-bezier(.3, 1.6, .5, 1);
+    }
+    #lever-arm .stick {
+      position: absolute;
+      inset: 0;
+      border-radius: 6px;
+      background: linear-gradient(90deg, #ccc, #fff, #bbb);
+    }
+    #lever-arm .knob {
+      position: absolute;
+      left: 50%; top: -22px;
+      width: 46px; height: 46px;
+      transform: translateX(-50%);
+      border-radius: 50%;
+      background: conic-gradient(#ff4f9a, #ff9a3c, #ffc93c, #3ccf9a, #4a9cff, #a35cff, #ff4f9a);
+      box-shadow: inset 0 -6px 10px rgba(0, 0, 0, .2), inset 0 6px 8px rgba(255, 255, 255, .6), 0 4px 10px rgba(120, 60, 180, .4);
+    }
+    #lever.pulled #lever-arm { transform: scaleY(-.55); transition: transform .18s ease-in; }
+
+    /* ---------- Controls ---------- */
+    #spin-btn {
+      margin-top: 22px;
+      width: 100%;
+      border: none;
+      padding: 16px;
+      border-radius: 999px;
+      font-family: inherit;
+      font-size: clamp(24px, 4vw, 32px);
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: .04em;
+      cursor: pointer;
+      background: linear-gradient(90deg, #ff4f9a, #ff9a3c, #ffc93c, #3ccf9a, #4a9cff, #a35cff, #ff4f9a);
+      background-size: 200% 100%;
+      animation: slide 4s linear infinite;
+      text-shadow: 0 2px 0 rgba(0, 0, 0, .15);
+      box-shadow: 0 6px 0 #b05ad6, 0 10px 20px rgba(120, 60, 180, .35);
+      transition: transform .1s, box-shadow .1s, filter .2s;
+    }
+    #spin-btn:active { transform: translateY(5px); box-shadow: 0 1px 0 #b05ad6, 0 4px 10px rgba(120, 60, 180, .35); }
+    #spin-btn:disabled { filter: grayscale(.6) brightness(1.05); cursor: default; }
+    @keyframes slide { to { background-position: 200% 0; } }
+
+    #result {
+      min-height: 150px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #syllable {
+      font-family: 'Andika', 'Fredoka', sans-serif;
+      font-weight: 700;
+      font-size: clamp(56px, 10vw, 90px);
+      line-height: 1;
+      padding: 6px 34px 14px;
+      border-radius: 30px;
+      background: rgba(255, 255, 255, .85);
+      box-shadow: 0 8px 24px rgba(120, 60, 180, .2);
+      opacity: 0;
+      transform: scale(.6);
+      transition: opacity .25s, transform .4s cubic-bezier(.3, 1.8, .5, 1);
+      white-space: nowrap;
+    }
+    #syllable.show { opacity: 1; transform: scale(1); }
+    #syllable .o { color: var(--onset); }
+    #syllable .v { color: var(--vowel); }
+    #syllable .c { color: var(--coda); }
+
+    #actions { display: flex; gap: 12px; opacity: 0; transition: opacity .3s; pointer-events: none; }
+    #actions.show { opacity: 1; pointer-events: auto; }
+
+    .action-btn {
+      border: none;
+      font-family: inherit;
+      font-size: 20px;
+      font-weight: 600;
+      padding: 10px 22px;
+      border-radius: 999px;
+      cursor: pointer;
+      color: #fff;
+      box-shadow: 0 4px 0 rgba(0, 0, 0, .15);
+      transition: transform .1s;
+    }
+    .action-btn:active { transform: translateY(3px); box-shadow: none; }
+    #read-btn { background: linear-gradient(180deg, #ffd24d, #f5a623); color: #6a3a00; }
+    #listen-btn { background: linear-gradient(180deg, #9d7bff, #7a4dff); }
+
+    #hint { font-size: 15px; color: #8a6aa8; opacity: .85; text-align: center; }
+
+    @keyframes pop {
+      0% { transform: scale(.3); }
+      100% { transform: scale(1); }
+    }
+
+    /* ---------- Settings ---------- */
+    #settings {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(90, 50, 140, .35);
+      backdrop-filter: blur(4px);
+      z-index: 20;
+      padding: 16px;
+    }
+    #settings.open { display: flex; }
+    #panel {
+      width: min(640px, 100%);
+      max-height: 92vh;
+      overflow-y: auto;
+      background: #fff;
+      border-radius: 28px;
+      padding: 24px;
+      box-shadow: 0 20px 50px rgba(80, 30, 140, .35), 0 0 0 5px var(--gold);
+    }
+    #panel h2 { font-size: 26px; margin-bottom: 4px; color: #7a4dff; }
+    #panel p.sub { color: #8a6aa8; margin-bottom: 14px; }
+    .group { margin-bottom: 16px; }
+    .group h3 { font-size: 17px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+    .group h3 .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--c); }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chip {
+      font-family: 'Andika', sans-serif;
+      font-size: 22px;
+      font-weight: 700;
+      min-width: 52px;
+      padding: 6px 12px;
+      border-radius: 14px;
+      border: 3px solid #eadcff;
+      background: #faf6ff;
+      color: #b9a6d6;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .chip.on { border-color: var(--c); background: var(--c); color: #fff; transform: translateY(-1px); box-shadow: 0 3px 0 rgba(0, 0, 0, .12); }
+    .seg { display: flex; gap: 8px; flex-wrap: wrap; }
+    .seg .chip { font-family: 'Fredoka', sans-serif; font-size: 17px; }
+    #settings-error { color: #e0245e; min-height: 22px; font-weight: 600; }
+    #panel-buttons { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+    #panel-buttons button {
+      border: none;
+      font-family: inherit;
+      font-size: 18px;
+      font-weight: 600;
+      padding: 10px 20px;
+      border-radius: 999px;
+      cursor: pointer;
+    }
+    #cancel-btn { background: #f0e8ff; color: #7a4dff; }
+    #apply-btn { background: linear-gradient(90deg, #ff4f9a, #a35cff); color: #fff; }
+
+    /* ---------- Celebration ---------- */
+    #fx { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+
+    #flyer {
+      position: fixed;
+      width: 160px;
+      left: -200px;
+      top: 30vh;
+      z-index: 11;
+      pointer-events: none;
+      display: none;
+    }
+    #flyer.fly { display: block; animation: fly 3.2s ease-in-out forwards; }
+    @keyframes fly {
+      0% { transform: translate(0, 0) rotate(-8deg); }
+      25% { transform: translate(30vw, -12vh) rotate(4deg); }
+      50% { transform: translate(60vw, 4vh) rotate(-6deg); }
+      75% { transform: translate(90vw, -10vh) rotate(4deg); }
+      100% { transform: translate(calc(100vw + 260px), 0) rotate(-4deg); }
+    }
+
+    #banner {
+      position: fixed;
+      left: 50%; top: 50%;
+      transform: translate(-50%, -50%) scale(0);
+      z-index: 12;
+      font-size: clamp(36px, 8vw, 72px);
+      font-weight: 700;
+      color: #fff;
+      text-align: center;
+      text-shadow: 0 4px 0 #a35cff, 0 8px 20px rgba(120, 60, 180, .5);
+      pointer-events: none;
+      transition: transform .5s cubic-bezier(.3, 1.8, .5, 1);
+    }
+    #banner.show { transform: translate(-50%, -50%) scale(1); }
+
+    @media (max-width: 560px) {
+      #lever { display: none; }
+      #machine { padding: 60px 14px 18px; }
+      #reels { gap: 8px; padding: 10px; }
+      .reel-label { font-size: 12px; padding: 2px 8px; }
+      #topbar { padding: 12px; }
+      #stars { gap: 1px; padding: 6px 10px; }
+      .star-slot { font-size: 16px; }
+      #rainbow-count { font-size: 15px; margin-left: 4px; }
+      .icon-btn { width: 40px; height: 40px; font-size: 19px; }
+    }
+    @media (hover: none) {
+      #hint { display: none; }
+    }
+    @media (max-height: 760px) {
+      h1 { display: none; }
+      #stage { padding-top: 110px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="sky">
+    <div class="rainbow"></div>
+  </div>
+
+  <div id="topbar">
+    <div id="stars" title="Sterne – 10 Sterne ergeben einen Regenbogen"></div>
+    <div id="buttons-right">
+      <button class="icon-btn" id="mute-btn" title="Ton an/aus">🔊</button>
+      <button class="icon-btn" id="settings-btn" title="Buchstaben wählen">⚙️</button>
+    </div>
+  </div>
+
+  <main id="stage">
+    <h1>Silben-Einhorn</h1>
+
+    <div id="machine-wrap">
+      <div id="machine">
+        <svg id="crest" viewBox="0 0 120 110" aria-hidden="true"></svg>
+        <div id="bulbs"></div>
+        <div id="reels">
+          <div class="reel-col" style="--c: var(--onset)">
+            <span class="reel-label">Anfang</span>
+            <div class="reel"><div class="strip"></div></div>
+          </div>
+          <div class="reel-col" style="--c: var(--vowel)">
+            <span class="reel-label">Selbstlaut</span>
+            <div class="reel"><div class="strip"></div></div>
+          </div>
+          <div class="reel-col" style="--c: var(--coda)">
+            <span class="reel-label">Ende</span>
+            <div class="reel"><div class="strip"></div></div>
+          </div>
+        </div>
+        <button id="spin-btn">Drehen! ✨</button>
+      </div>
+      <div id="lever" title="Ziehen!">
+        <div id="lever-base"></div>
+        <div id="lever-arm"><div class="stick"></div><div class="knob"></div></div>
+      </div>
+    </div>
+
+    <div id="result">
+      <div id="syllable"></div>
+      <div id="actions">
+        <button class="action-btn" id="read-btn">⭐ Gelesen!</button>
+        <button class="action-btn" id="listen-btn">🔊 Anhören</button>
+      </div>
+      <div id="hint">Leertaste: drehen · Enter: gelesen</div>
+    </div>
+  </main>
+
+  <div id="settings">
+    <div id="panel">
+      <h2>Welche Buchstaben kennst du schon?</h2>
+      <p class="sub">Tippe die Buchstaben an, die in den Walzen vorkommen sollen.</p>
+      <div id="groups"></div>
+      <div class="group">
+        <h3>Silbenende</h3>
+        <div class="seg" id="ending-mode"></div>
+      </div>
+      <div id="settings-error"></div>
+      <div id="panel-buttons">
+        <button id="cancel-btn">Abbrechen</button>
+        <button id="apply-btn">Fertig</button>
+      </div>
+    </div>
+  </div>
+
+  <canvas id="fx"></canvas>
+  <svg id="flyer" viewBox="0 0 120 110" aria-hidden="true"></svg>
+  <div id="banner"></div>
+
+  <script>
+    // ---------- Unicorn artwork ----------
+    const UNICORN_SVG = `
+      <g>
+        <path d="M30 104 C20 80 22 50 40 34 C30 52 28 78 38 104 Z" fill="#ff6fa8"/>
+        <path d="M38 104 C30 80 32 54 48 38 C40 56 40 80 46 104 Z" fill="#ffb347"/>
+        <path d="M46 104 C40 82 42 58 54 42 C50 60 50 82 54 104 Z" fill="#ffe066"/>
+        <path d="M24 92 C12 70 16 44 34 30 C26 50 24 72 30 94 Z" fill="#a78bfa"/>
+        <path d="M18 78 C8 60 14 38 30 28 C24 46 22 62 24 80 Z" fill="#60a5fa"/>
+        <path d="M44 104 C40 84 42 60 54 46 C62 36 74 32 86 36 C98 40 108 52 108 62
+                 C108 72 100 78 90 76 C82 75 76 74 72 80 C68 88 70 98 74 104 Z"
+              fill="#ffffff" stroke="#c9b3ee" stroke-width="2.5" stroke-linejoin="round"/>
+        <path d="M58 42 L62 22 L72 36 Z" fill="#fff" stroke="#c9b3ee" stroke-width="2.5" stroke-linejoin="round"/>
+        <path d="M61 37 L64 28 L68 35 Z" fill="#ffc6e0"/>
+        <path d="M72 35 L84 4 L82 37 Z" fill="#ffd34d" stroke="#e8a817" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M74 30 L82 26 M76 22 L83 18 M79 14 L83.5 11" stroke="#e8a817" stroke-width="2" stroke-linecap="round"/>
+        <path d="M44 34 C52 24 64 22 74 30 C64 30 56 36 50 46 Z" fill="#ff6fa8"/>
+        <path d="M78 52 C81 56 87 56 90 52" fill="none" stroke="#4a2a6a" stroke-width="3" stroke-linecap="round"/>
+        <path d="M80 54 L77 58 M84 56 L83 60 M88 54 L90 58" stroke="#4a2a6a" stroke-width="2" stroke-linecap="round"/>
+        <ellipse cx="92" cy="64" rx="6" ry="4" fill="#ffb3d1" opacity=".8"/>
+        <circle cx="103" cy="62" r="2" fill="#c9b3ee"/>
+      </g>`;
+    document.getElementById('crest').innerHTML = UNICORN_SVG;
+    document.getElementById('flyer').innerHTML = UNICORN_SVG;
+
+    // ---------- Letter inventory ----------
+    // Each sound knows where in a syllable it may appear.
+    const GROUPS = [
+      { key: 'vowels', title: 'Selbstlaute', color: 'var(--vowel)', slot: 'vowel',
+        items: ['a', 'e', 'i', 'o', 'u'] },
+      { key: 'umlauts', title: 'Umlaute', color: 'var(--vowel)', slot: 'vowel',
+        items: ['ä', 'ö', 'ü'] },
+      { key: 'diphthongs', title: 'Doppellaute', color: 'var(--vowel)', slot: 'vowel',
+        items: ['au', 'ei', 'eu', 'äu', 'ie'] },
+      { key: 'consonants', title: 'Mitlaute', color: 'var(--onset)', slot: 'consonant',
+        items: ['m', 'l', 'n', 'r', 's', 't', 'f', 'h', 'w', 'b', 'd', 'g', 'k', 'p', 'j', 'z', 'v'] },
+      { key: 'clusters', title: 'Weitere Laute', color: 'var(--coda)', slot: 'cluster',
+        items: ['sch', 'st', 'sp', 'ch', 'pf', 'qu', 'ck', 'ng', 'nk'] },
+    ];
+
+    // Consonants that sound natural at the end of a German syllable
+    const CODA_CONSONANTS = new Set(['m', 'l', 'n', 'r', 's', 't', 'f', 'b', 'd', 'g', 'k', 'p', 'z']);
+    const ONSET_CLUSTERS = new Set(['sch', 'st', 'sp', 'ch', 'pf', 'qu']);
+    const CODA_CLUSTERS = new Set(['ch', 'ck', 'ng', 'nk', 'sch', 'pf']);
+    // ck, ng and nk follow short vowels only
+    const SHORT_ONLY = new Set(['ck', 'ng', 'nk']);
+    const LONG_VOWELS = new Set(['au', 'ei', 'eu', 'äu', 'ie']);
+
+    const DEFAULT_SELECTION = ['a', 'e', 'i', 'o', 'u', 'm', 'l', 'n', 'r', 's', 't', 'f'];
+
+    const ENDING_MODES = [
+      { key: 'open', label: 'offen (ma, lo)' },
+      { key: 'mixed', label: 'gemischt' },
+      { key: 'closed', label: 'mit Endbuchstabe (mal, los)' },
+    ];
+
+    function loadJSON(key, fallback) {
+      try {
+        const v = localStorage.getItem(key);
+        return v ? JSON.parse(v) : fallback;
+      } catch { return fallback; }
+    }
+    function saveJSON(key, value) {
+      try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+    }
+
+    let selection = new Set(loadJSON('silben-einhorn-selection', DEFAULT_SELECTION));
+    let endingMode = loadJSON('silben-einhorn-ending', 'mixed');
+    let stars = loadJSON('silben-einhorn-stars', 0);
+    let rainbows = loadJSON('silben-einhorn-rainbows', 0);
+    let muted = loadJSON('silben-einhorn-muted', false);
+
+    function pools(sel = selection) {
+      const vowels = [], onsets = [], codas = [];
+      for (const g of GROUPS) {
+        for (const item of g.items) {
+          if (!sel.has(item)) continue;
+          if (g.slot === 'vowel') vowels.push(item);
+          if (g.slot === 'consonant') {
+            onsets.push(item);
+            if (CODA_CONSONANTS.has(item)) codas.push(item);
+          }
+          if (g.slot === 'cluster') {
+            if (ONSET_CLUSTERS.has(item)) onsets.push(item);
+            if (CODA_CLUSTERS.has(item)) codas.push(item);
+          }
+        }
+      }
+      return { onsets, vowels, codas };
+    }
+
+    const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+
+    let lastSyllable = '';
+    function makeSyllable() {
+      const { onsets, vowels, codas } = pools();
+      for (let tries = 0; tries < 40; tries++) {
+        const onset = pick(onsets);
+        let vowel = pick(vowels);
+        // "qu" already carries a u-sound, so pair it with a different vowel
+        if (onset === 'qu' && vowel === 'u' && vowels.length > 1) continue;
+        let coda = '';
+        const wantCoda = endingMode === 'closed' || (endingMode === 'mixed' && Math.random() < .5);
+        if (wantCoda && codas.length) {
+          const options = codas.filter(c => !(SHORT_ONLY.has(c) && LONG_VOWELS.has(vowel)) && c !== onset);
+          if (options.length) coda = pick(options);
+        }
+        const s = onset + vowel + coda;
+        if (s !== lastSyllable) { lastSyllable = s; return { onset, vowel, coda }; }
+      }
+      return { onset: pick(onsets), vowel: pick(vowels), coda: '' };
+    }
+
+    // ---------- Sound ----------
+    let audio = null;
+    function ac() {
+      if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+      if (audio.state === 'suspended') audio.resume();
+      return audio;
+    }
+
+    function tone(freq, { at = 0, dur = .2, type = 'sine', gain = .2, slideTo = null, attack = .005 } = {}) {
+      if (muted) return;
+      const ctx = ac();
+      const t = ctx.currentTime + at;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, t);
+      if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(gain, t + attack);
+      g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+      osc.connect(g).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + dur + .05);
+    }
+
+    function noise({ at = 0, dur = .3, from = 400, to = 2400, gain = .25 } = {}) {
+      if (muted) return;
+      const ctx = ac();
+      const t = ctx.currentTime + at;
+      const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.Q.value = 2;
+      filter.frequency.setValueAtTime(from, t);
+      filter.frequency.exponentialRampToValueAtTime(to, t + dur);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(gain, t);
+      g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+      src.connect(filter).connect(g).connect(ctx.destination);
+      src.start(t);
+    }
+
+    // C major pentatonic, so random sparkles always sound pretty
+    const PENTA = [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.51, 1567.98, 1760, 2093];
+
+    const sfx = {
+      click() { tone(620, { dur: .08, slideTo: 900, gain: .15 }); },
+      lever() {
+        noise({ dur: .35, from: 300, to: 2600, gain: .2 });
+        for (let i = 0; i < 5; i++) tone(260 + i * 60, { at: i * .035, dur: .03, type: 'square', gain: .05 });
+      },
+      tick(reel) { tone(1500 + reel * 260, { dur: .025, type: 'triangle', gain: .06 }); },
+      stop(reel) {
+        tone(150, { dur: .14, slideTo: 60, gain: .3 });
+        tone([1046.5, 1318.51, 1567.98][reel], { at: .02, dur: .6, type: 'triangle', gain: .14 });
+      },
+      result() {
+        [1046.5, 1318.51, 1567.98, 2093].forEach((f, i) => tone(f, { at: .05 + i * .07, dur: .35, gain: .1 }));
+        for (let i = 0; i < 6; i++) tone(pick(PENTA) * 2, { at: .3 + i * .05, dur: .15, gain: .03 });
+      },
+      star() {
+        tone(1318.51, { dur: .25, type: 'triangle', gain: .15 });
+        tone(1760, { at: .09, dur: .4, type: 'triangle', gain: .15 });
+        for (let i = 0; i < 8; i++) tone(PENTA[5 + (i % 6)] * 2, { at: .15 + i * .04, dur: .12, gain: .03 });
+      },
+      rainbow() {
+        PENTA.concat(PENTA.map(f => f * 2)).forEach((f, i) =>
+          tone(f, { at: i * .06, dur: .6, type: 'triangle', gain: .07 }));
+        [523.25, 659.25, 783.99, 1046.5].forEach(f => tone(f, { at: 1.4, dur: 1.6, gain: .08, attack: .05 }));
+        noise({ at: .1, dur: 1.2, from: 3000, to: 8000, gain: .05 });
+      },
+      oops() {
+        tone(330, { dur: .15, type: 'square', gain: .06 });
+        tone(247, { at: .15, dur: .25, type: 'square', gain: .06 });
+      },
+    };
+
+    // ---------- Reels ----------
+    const reelEls = [...document.querySelectorAll('.reel')];
+    const stripEls = reelEls.map(r => r.querySelector('.strip'));
+    const machine = document.getElementById('machine');
+    const syllableEl = document.getElementById('syllable');
+    const actionsEl = document.getElementById('actions');
+    const spinBtn = document.getElementById('spin-btn');
+    const lever = document.getElementById('lever');
+
+    const BLANK = '✦';
+
+    function cellHTML(text) {
+      return text
+        ? `<div class="cell">${text}</div>`
+        : `<div class="cell blank">${BLANK}</div>`;
+    }
+
+    function setStrip(i, items) {
+      stripEls[i].innerHTML = items.map(cellHTML).join('');
+      stripEls[i].style.transform = 'translateY(0)';
+    }
+
+    function reelPool(i) {
+      const { onsets, vowels, codas } = pools();
+      if (i === 0) return onsets;
+      if (i === 1) return vowels;
+      if (endingMode === 'open' || !codas.length) return [''];
+      return endingMode === 'closed' ? codas : codas.concat(['', '']);
+    }
+
+    function initReels() {
+      const s = makeSyllable();
+      [s.onset, s.vowel, s.coda].forEach((v, i) => setStrip(i, [v]));
+    }
+
+    // easeOutBack with a gentle overshoot, so reels settle with a little bounce
+    function ease(p) {
+      const c = .9;
+      return 1 + (c + 1) * Math.pow(p - 1, 3) + c * Math.pow(p - 1, 2);
+    }
+
+    let spinning = false;
+    let current = null;
+
+    function spinReel(i, target, duration) {
+      return new Promise(resolve => {
+        const pool = reelPool(i);
+        const count = 14 + i * 6;
+        const currentText = stripEls[i].querySelector('.cell')?.classList.contains('blank')
+          ? '' : (stripEls[i].querySelector('.cell')?.textContent || '');
+        const items = [currentText];
+        for (let k = 0; k < count; k++) items.push(pick(pool));
+        items.push(target);
+        setStrip(i, items);
+        const h = reelEls[i].clientHeight;
+        const total = (items.length - 1) * h;
+        const start = performance.now();
+        let lastCell = 0;
+        function frame(now) {
+          const p = Math.min(1, (now - start) / duration);
+          const y = ease(p) * total;
+          stripEls[i].style.transform = `translateY(${-y}px)`;
+          const cellIdx = Math.floor((y + h / 2) / h);
+          if (cellIdx > lastCell) { lastCell = cellIdx; sfx.tick(i); }
+          if (p < 1) requestAnimationFrame(frame);
+          else {
+            setStrip(i, [target]);
+            reelEls[i].classList.remove('landed');
+            void reelEls[i].offsetWidth;
+            reelEls[i].classList.add('landed');
+            sfx.stop(i);
+            resolve();
+          }
+        }
+        requestAnimationFrame(frame);
+      });
+    }
+
+    async function spin() {
+      if (spinning) return;
+      spinning = true;
+      spinBtn.disabled = true;
+      machine.classList.add('spinning');
+      machine.classList.remove('won');
+      syllableEl.classList.remove('show');
+      actionsEl.classList.remove('show');
+      lever.classList.add('pulled');
+      sfx.lever();
+      setTimeout(() => lever.classList.remove('pulled'), 260);
+
+      current = makeSyllable();
+      const targets = [current.onset, current.vowel, current.coda];
+      await Promise.all(targets.map((t, i) => spinReel(i, t, 1100 + i * 550)));
+
+      machine.classList.remove('spinning');
+      machine.classList.add('won');
+      setTimeout(() => machine.classList.remove('won'), 900);
+      showResult();
+      spinning = false;
+      spinBtn.disabled = false;
+    }
+
+    function showResult() {
+      const { onset, vowel, coda } = current;
+      syllableEl.innerHTML = `<span class="o">${onset}</span><span class="v">${vowel}</span><span class="c">${coda}</span>`;
+      syllableEl.classList.add('show');
+      actionsEl.classList.add('show');
+      current.read = false;
+      sfx.result();
+      const r = syllableEl.getBoundingClientRect();
+      burst(r.left + r.width / 2, r.top + r.height / 2, 28, 5);
+    }
+
+    function markRead() {
+      if (!current || current.read || spinning) return;
+      current.read = true;
+      actionsEl.classList.remove('show');
+      sfx.star();
+      const r = syllableEl.getBoundingClientRect();
+      burst(r.left + r.width / 2, r.top + r.height / 2, 40, 7);
+      stars++;
+      if (stars >= 10) {
+        renderStars(10);
+        stars = 0;
+        rainbows++;
+        setTimeout(celebrate, 500);
+        setTimeout(renderStars, 3800);
+      } else {
+        renderStars();
+      }
+      saveJSON('silben-einhorn-stars', stars);
+      saveJSON('silben-einhorn-rainbows', rainbows);
+    }
+
+    function speak() {
+      if (!current || !('speechSynthesis' in window)) return;
+      const text = current.onset + current.vowel + current.coda;
+      const u = new SpeechSynthesisUtterance(text.charAt(0).toUpperCase() + text.slice(1));
+      u.lang = 'de-DE';
+      u.rate = .7;
+      speechSynthesis.cancel();
+      speechSynthesis.speak(u);
+    }
+
+    // ---------- Stars ----------
+    const starsEl = document.getElementById('stars');
+    function renderStars(filled = stars) {
+      starsEl.innerHTML = Array.from({ length: 10 }, (_, i) =>
+        `<span class="star-slot${i < filled ? ' filled' : ''}"${i < filled - 1 ? ' style="animation:none"' : ''}>★</span>`
+      ).join('') + `<span id="rainbow-count">🌈 ${rainbows}</span>`;
+    }
+
+    // ---------- Effects canvas ----------
+    const canvas = document.getElementById('fx');
+    const ctx2d = canvas.getContext('2d');
+    const RAINBOW = ['#ff4f6d', '#ff9a3c', '#ffd23c', '#3ccf7a', '#3c9cff', '#8a5cff', '#d85cff'];
+    let particles = [];
+
+    function resize() {
+      canvas.width = innerWidth * devicePixelRatio;
+      canvas.height = innerHeight * devicePixelRatio;
+      canvas.style.width = innerWidth + 'px';
+      canvas.style.height = innerHeight + 'px';
+      ctx2d.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    }
+    addEventListener('resize', resize);
+    resize();
+
+    function burst(x, y, n, speed) {
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const v = speed * (.4 + Math.random());
+        particles.push({
+          x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 2,
+          life: 1, decay: .012 + Math.random() * .015,
+          size: 4 + Math.random() * 6, color: pick(RAINBOW),
+          shape: Math.random() < .5 ? 'star' : 'dot', spin: Math.random() * 6, g: .12,
+        });
+      }
+    }
+
+    function confetti(n) {
+      for (let i = 0; i < n; i++) {
+        particles.push({
+          x: Math.random() * innerWidth, y: -20 - Math.random() * innerHeight * .5,
+          vx: (Math.random() - .5) * 2, vy: 2 + Math.random() * 3,
+          life: 1, decay: .003, size: 6 + Math.random() * 6, color: pick(RAINBOW),
+          shape: 'rect', spin: Math.random() * 6, g: .03,
+        });
+      }
+    }
+
+    function drawStar(x, y, r, rot) {
+      ctx2d.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const rad = i % 2 ? r * .45 : r;
+        const a = rot + i * Math.PI / 5;
+        ctx2d.lineTo(x + Math.cos(a) * rad, y + Math.sin(a) * rad);
+      }
+      ctx2d.closePath();
+      ctx2d.fill();
+    }
+
+    const flyer = document.getElementById('flyer');
+
+    function loop() {
+      ctx2d.clearRect(0, 0, innerWidth, innerHeight);
+
+      // rainbow trail behind the flying unicorn
+      if (flyer.classList.contains('fly')) {
+        const r = flyer.getBoundingClientRect();
+        RAINBOW.forEach((color, i) => {
+          particles.push({
+            x: r.left + 30, y: r.top + r.height * .55 + (i - 3) * 7,
+            vx: -.5, vy: 0, life: 1, decay: .01, size: 9, color, shape: 'trail', spin: 0, g: 0,
+          });
+        });
+      }
+
+      for (const p of particles) {
+        p.x += p.vx; p.y += p.vy; p.vy += p.g; p.life -= p.decay; p.spin += .1;
+        ctx2d.globalAlpha = Math.max(0, p.life);
+        ctx2d.fillStyle = p.color;
+        if (p.shape === 'star') drawStar(p.x, p.y, p.size, p.spin);
+        else if (p.shape === 'rect') {
+          ctx2d.save();
+          ctx2d.translate(p.x, p.y);
+          ctx2d.rotate(p.spin);
+          ctx2d.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+          ctx2d.restore();
+        } else if (p.shape === 'trail') {
+          ctx2d.fillRect(p.x, p.y, 8, p.size);
+        } else {
+          ctx2d.beginPath();
+          ctx2d.arc(p.x, p.y, p.size / 2, 0, Math.PI * 2);
+          ctx2d.fill();
+        }
+      }
+      ctx2d.globalAlpha = 1;
+      particles = particles.filter(p => p.life > 0 && p.y < innerHeight + 40);
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+
+    const banner = document.getElementById('banner');
+    function celebrate() {
+      sfx.rainbow();
+      confetti(160);
+      flyer.classList.remove('fly');
+      void flyer.offsetWidth;
+      flyer.classList.add('fly');
+      banner.innerHTML = 'Super! 🌈<br>Ein Regenbogen!';
+      banner.classList.add('show');
+      setTimeout(() => banner.classList.remove('show'), 2600);
+      setTimeout(() => flyer.classList.remove('fly'), 3300);
+    }
+
+    // ---------- Settings ----------
+    const settingsEl = document.getElementById('settings');
+    const groupsEl = document.getElementById('groups');
+    const endingEl = document.getElementById('ending-mode');
+    const errorEl = document.getElementById('settings-error');
+    let draft = null;
+    let draftEnding = null;
+
+    function renderSettings() {
+      groupsEl.innerHTML = GROUPS.map(g => `
+        <div class="group" style="--c: ${g.color}">
+          <h3><span class="dot"></span>${g.title}</h3>
+          <div class="chips">
+            ${g.items.map(it => `<button class="chip${draft.has(it) ? ' on' : ''}" data-item="${it}">${it}</button>`).join('')}
+          </div>
+        </div>`).join('');
+      endingEl.style.setProperty('--c', 'var(--coda)');
+      endingEl.innerHTML = ENDING_MODES.map(m =>
+        `<button class="chip${draftEnding === m.key ? ' on' : ''}" data-mode="${m.key}">${m.label}</button>`).join('');
+    }
+
+    function openSettings() {
+      draft = new Set(selection);
+      draftEnding = endingMode;
+      errorEl.textContent = '';
+      renderSettings();
+      settingsEl.classList.add('open');
+    }
+
+    groupsEl.addEventListener('click', e => {
+      const chip = e.target.closest('.chip');
+      if (!chip) return;
+      const it = chip.dataset.item;
+      draft.has(it) ? draft.delete(it) : draft.add(it);
+      chip.classList.toggle('on');
+      sfx.click();
+    });
+
+    endingEl.addEventListener('click', e => {
+      const chip = e.target.closest('.chip');
+      if (!chip) return;
+      draftEnding = chip.dataset.mode;
+      sfx.click();
+      renderSettings();
+    });
+
+    document.getElementById('cancel-btn').addEventListener('click', () => {
+      sfx.click();
+      settingsEl.classList.remove('open');
+    });
+
+    document.getElementById('apply-btn').addEventListener('click', () => {
+      const p = pools(draft);
+      if (!p.vowels.length) { errorEl.textContent = 'Bitte wähle mindestens einen Selbstlaut.'; sfx.oops(); return; }
+      if (!p.onsets.length) { errorEl.textContent = 'Bitte wähle mindestens einen Anfangslaut.'; sfx.oops(); return; }
+      if (draftEnding === 'closed' && !p.codas.length) {
+        errorEl.textContent = 'Für Endbuchstaben brauchst du z. B. m, n, l, s oder t.'; sfx.oops(); return;
+      }
+      selection = draft;
+      endingMode = draftEnding;
+      saveJSON('silben-einhorn-selection', [...selection]);
+      saveJSON('silben-einhorn-ending', endingMode);
+      settingsEl.classList.remove('open');
+      sfx.star();
+      syllableEl.classList.remove('show');
+      actionsEl.classList.remove('show');
+      current = null;
+      initReels();
+    });
+
+    // ---------- Wiring ----------
+    const muteBtn = document.getElementById('mute-btn');
+    function renderMute() { muteBtn.textContent = muted ? '🔇' : '🔊'; }
+    muteBtn.addEventListener('click', () => {
+      muted = !muted;
+      saveJSON('silben-einhorn-muted', muted);
+      renderMute();
+      sfx.click();
+    });
+
+    document.getElementById('settings-btn').addEventListener('click', () => { sfx.click(); openSettings(); });
+    spinBtn.addEventListener('click', spin);
+    lever.addEventListener('click', spin);
+    document.getElementById('read-btn').addEventListener('click', markRead);
+    document.getElementById('listen-btn').addEventListener('click', () => { sfx.click(); speak(); });
+    if (!('speechSynthesis' in window)) document.getElementById('listen-btn').style.display = 'none';
+
+    addEventListener('keydown', e => {
+      if (settingsEl.classList.contains('open')) {
+        if (e.key === 'Escape') settingsEl.classList.remove('open');
+        return;
+      }
+      if (e.code === 'Space') { e.preventDefault(); spin(); }
+      if (e.key === 'Enter') { e.preventDefault(); markRead(); }
+    });
+
+    // ---------- Scenery ----------
+    const sky = document.getElementById('sky');
+    for (let i = 0; i < 5; i++) {
+      const c = document.createElement('div');
+      c.className = 'cloud';
+      c.style.top = (5 + Math.random() * 55) + 'vh';
+      c.style.setProperty('--s', (.6 + Math.random() * .7).toFixed(2));
+      c.style.animationDuration = (50 + Math.random() * 50) + 's';
+      c.style.animationDelay = (-Math.random() * 90) + 's';
+      sky.appendChild(c);
+    }
+    for (let i = 0; i < 18; i++) {
+      const t = document.createElement('div');
+      t.className = 'twinkle';
+      t.textContent = '✦';
+      t.style.left = Math.random() * 100 + 'vw';
+      t.style.top = Math.random() * 100 + 'vh';
+      t.style.animationDelay = (-Math.random() * 3) + 's';
+      t.style.fontSize = (10 + Math.random() * 16) + 'px';
+      sky.appendChild(t);
+    }
+
+    const bulbsEl = document.getElementById('bulbs');
+    bulbsEl.innerHTML = Array.from({ length: 9 }, (_, i) =>
+      `<span class="bulb" style="--c:${RAINBOW[i % RAINBOW.length]}"></span>`).join('');
+
+    renderStars();
+    renderMute();
+    initReels();
+  </script>
+</body>
+</html>
