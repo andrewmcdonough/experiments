@@ -20,3 +20,4 @@ A few experimental projects.
 * [balloon-pop](https://experiments.andrewmcdonough.com/balloon-pop/): Body-tracking balloon game — pop floating balloons with any part of your body, 1 minute on the clock, 1 or 2 players
 * [silben-einhorn](https://experiments.andrewmcdonough.com/silben-einhorn/): Unicorn syllable slot machine — pull the rainbow lever to spin start, vowel and end reels, read the German syllable aloud and collect stars for rainbows
 * [berlin-marathon](https://experiments.andrewmcdonough.com/berlin-marathon/): Run the Berlin Marathon — alternate A and S to run past Berlin landmarks, manage your stamina to avoid hitting the wall, and race the ghost of the course record
+* [unicorn-rainbows](https://experiments.andrewmcdonough.com/unicorn-rainbows/): A gentle flying unicorn game for little ones — no way to lose, press space to fly, run along the ground and collect rainbows and treats for points
