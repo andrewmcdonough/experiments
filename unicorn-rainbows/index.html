@@ -32,19 +32,52 @@
       text-shadow: 2px 2px 0 #333;
       pointer-events: none;
     }
+    #menu {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 2rem;
+      padding: 16px;
+      background: rgba(0,0,0,0.35);
+      color: #fff;
+      text-shadow: 2px 2px 0 #333;
+    }
+    #menu h1 { font-size: 2.5rem; text-align: center; }
+    #menu .choices { display: flex; flex-wrap: wrap; justify-content: center; gap: 2rem; }
+    #menu button {
+      display: flex; flex-direction: column; align-items: center; gap: 0.5rem;
+      padding: 1.5rem 2.5rem;
+      font: inherit; font-size: 2rem;
+      color: #fff;
+      text-shadow: 2px 2px 0 #333;
+      border: 4px solid #fff;
+      border-radius: 24px;
+      cursor: pointer;
+    }
+    #menu .big { font-size: 5rem; }
+    #menu .keys { font-size: 1.2rem; }
+    #choose-unicorns { background: #E040FB; }
+    #choose-monsters { background: #43A047; }
     .hidden { display: none !important; }
   </style>
 </head>
 <body>
   <canvas id="game"></canvas>
   <div id="score">0</div>
-  <div id="hint">🦄 Press space to fly!</div>
+  <div id="hint" class="hidden"></div>
+  <div id="menu">
+    <h1>What do you want to be?</h1>
+    <div class="choices">
+      <button id="choose-unicorns"><span class="big">🦄</span>Unicorns<span class="keys">🅰 or U</span></button>
+      <button id="choose-monsters"><span class="big">👾</span>Monsters<span class="keys">🅱 or M</span></button>
+    </div>
+  </div>
 
   <script>
     const canvas = document.getElementById('game');
     const ctx = canvas.getContext('2d');
     const scoreEl = document.getElementById('score');
     const hintEl = document.getElementById('hint');
+    const menuEl = document.getElementById('menu');
 
     // --- Game constants ---
     const STEP_MS = 1000 / 60; // fixed update rate, so 120Hz screens don't run double speed
@@ -54,13 +87,110 @@
     const WORLD_SPEED = 2.5;
     const ITEM_SPAWN_RATE = 70; // frames
     const ITEM_SIZE = 52;
-    const RAINBOW_SIZE = 76;
-    const RAINBOW_CHANCE = 0.4;
+    const PRIZE_SIZE = 76;
+    const PRIZE_CHANCE = 0.4;
     const GROUND_ITEM_CHANCE = 0.3;
     const COLLECT_MARGIN = 30; // generous reach beyond the item's edge
-    const TREATS = ['⭐', '💖', '🍭', '🧁', '🦋', '💎', '🍦', '🎈'];
     const GROUND_HEIGHT = 60;
     const FOOT_OFFSET = 18; // unicorn centre to hooves
+    const GAMEPAD_A = 0; // A on an Xbox controller in the standard mapping
+    const GAMEPAD_B = 1;
+    const MAX_CONTROLLERS = 4;
+
+    // --- Themes ---
+    // Everything that differs between unicorns and monsters. Each item has its own
+    // sound: notes are [frequency Hz, start s, length s], with an optional fourth value
+    // to glide the pitch to by the end of the note.
+    const THEMES = {
+      unicorns: {
+        hint: '🦄 Press space or 🅰 to fly!',
+        sky: 'linear-gradient(to bottom, #87CEEB 0%, #E0F7FA 60%, #90EE90 100%)',
+        cloud: 'rgba(255,255,255,0.8)',
+        ground: { soil: '#8B5A2B', top: '#4CAF50', stripe: '#6D4C41' },
+        prize: '🌈',
+        treats: ['⭐', '💖', '🍭', '🧁', '🦋', '💎', '🍦', '🎈'],
+        palettes: [
+          { body: '#fff',    mane: ['#E040FB', '#00BCD4', '#FF4081'] },
+          { body: '#E1F5FE', mane: ['#FFB300', '#FF7043', '#FFEE58'] },
+          { body: '#FCE4EC', mane: ['#7C4DFF', '#448AFF', '#69F0AE'] },
+          { body: '#F3E5F5', mane: ['#00C853', '#FFD600', '#FF6D00'] },
+        ],
+        sparkleColor: () => `hsl(${Math.random()*360},80%,70%)`,
+        trailColor: () => `hsl(${(frame * 2) % 360},80%,70%)`, // rainbow
+        draw: drawUnicorn,
+        sounds: {
+          '🌈': { wave: 'sine',     notes: [[523, 0, 0.3], [659, 0.07, 0.3], [784, 0.14, 0.3], [1047, 0.21, 0.3], [1319, 0.28, 0.5], [1568, 0.35, 0.6]] },
+          '⭐': { wave: 'triangle', notes: [[1568, 0, 0.15], [2093, 0.06, 0.15], [2637, 0.12, 0.3]] },
+          '💖': { wave: 'sine',     notes: [[659, 0, 0.2], [880, 0.15, 0.4]] },
+          '🍭': { wave: 'sine',     notes: [[400, 0, 0.35, 1200]] },
+          '🧁': { wave: 'square',   notes: [[523, 0, 0.08], [784, 0.08, 0.08], [1047, 0.16, 0.12]] },
+          '🦋': { wave: 'triangle', notes: [[1175, 0, 0.06], [1397, 0.06, 0.06], [1175, 0.12, 0.06], [1397, 0.18, 0.06], [1760, 0.24, 0.2]] },
+          '💎': { wave: 'sine',     notes: [[2093, 0, 0.8], [3136, 0, 0.6]] },
+          '🍦': { wave: 'triangle', notes: [[1047, 0, 0.2], [880, 0.1, 0.2], [784, 0.2, 0.2], [659, 0.3, 0.35]] },
+          '🎈': { wave: 'sine',     notes: [[300, 0, 0.5, 900]] },
+        },
+      },
+      monsters: {
+        hint: '👾 Press space or 🅰 to fly!',
+        sky: 'linear-gradient(to bottom, #1A0B3D 0%, #4A148C 60%, #2E7D32 100%)',
+        cloud: 'rgba(130,110,170,0.5)',
+        ground: { soil: '#3E2A47', top: '#76FF03', stripe: '#2A1B33' },
+        prize: '🎃',
+        treats: ['🍬', '🦴', '🐛', '🍄', '🧪', '👁️', '🪲', '🧦'],
+        palettes: [
+          { body: '#66BB6A', horns: '#FFF59D', wing: '#2E7D32' },
+          { body: '#AB47BC', horns: '#FFCC80', wing: '#6A1B9A' },
+          { body: '#FF7043', horns: '#FFF59D', wing: '#BF360C' },
+          { body: '#29B6F6', horns: '#E1BEE7', wing: '#01579B' },
+        ],
+        sparkleColor: () => `hsl(${90 + Math.random()*200},90%,60%)`, // greens through purples
+        trailColor: () => `hsl(100,100%,${45 + Math.random()*20}%)`,  // slime
+        draw: drawMonster,
+        sounds: {
+          '🎃': { wave: 'sawtooth', notes: [[220, 0, 0.25, 330], [330, 0.2, 0.25, 165], [262, 0.4, 0.25, 392], [392, 0.6, 0.5, 196]] },
+          '🍬': { wave: 'square',   notes: [[880, 0, 0.08], [660, 0.08, 0.12]] },
+          '🦴': { wave: 'triangle', notes: [[200, 0, 0.1], [150, 0.1, 0.15]] },
+          '🐛': { wave: 'square',   notes: [[1200, 0, 0.03], [1000, 0.04, 0.03], [1200, 0.08, 0.03], [900, 0.12, 0.03], [1100, 0.16, 0.05]] },
+          '🍄': { wave: 'sine',     notes: [[150, 0, 0.3, 600]] },
+          '🧪': { wave: 'sine',     notes: [[300, 0, 0.08, 600], [350, 0.1, 0.08, 700], [400, 0.2, 0.12, 900]] },
+          '👁️': { wave: 'sawtooth', notes: [[440, 0, 0.6], [466, 0, 0.6]] },
+          '🪲': { wave: 'sawtooth', notes: [[110, 0, 0.3, 140]] },
+          '🧦': { wave: 'triangle', notes: [[392, 0, 0.2, 370], [311, 0.25, 0.4, 277]] },
+        },
+      },
+    };
+    let theme = THEMES.unicorns;
+
+    // --- Sound ---
+    const SOUND_VOLUME = 0.15;
+    let audio = null;
+
+    // Browsers only allow sound after the player has pressed something
+    function unlockAudio() {
+      if (!audio) audio = new AudioContext();
+      if (audio.state === 'suspended') audio.resume();
+    }
+
+    function playSound(emoji) {
+      const sound = theme.sounds[emoji];
+      if (!audio || !sound) return;
+      const now = audio.currentTime;
+      sound.notes.forEach(([freq, start, length, glideTo]) => {
+        const osc = audio.createOscillator();
+        const gain = audio.createGain();
+        const t = now + start;
+        osc.type = sound.wave;
+        osc.frequency.setValueAtTime(freq, t);
+        if (glideTo) osc.frequency.exponentialRampToValueAtTime(glideTo, t + length);
+        // Quick fade in, then a bell-like decay
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.exponentialRampToValueAtTime(SOUND_VOLUME, t + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + length);
+        osc.connect(gain).connect(audio.destination);
+        osc.start(t);
+        osc.stop(t + length);
+      });
+    }
 
     // --- State ---
     let frame = 0;
@@ -68,7 +198,10 @@
     let width, height;
 
     // --- Entities ---
-    let unicorn = { x: 0, y: 0, w: 40, h: 30, vy: 0, angle: 0, flapTimer: 0, onGround: true };
+    // One unicorn (or monster) per controller (keyed by gamepad index), or a single one with no controllers
+    let unicorns = [];
+    const gamepadUnicorns = new Map();
+    const gamepadButtonWasPressed = new Map();
     let items = [];
     let clouds = [];
     let particles = [];
@@ -78,16 +211,30 @@
       return height - GROUND_HEIGHT;
     }
 
+    function placeUnicorns() {
+      unicorns.forEach((u, i) => {
+        u.x = width * 0.25 - i * 50;
+        if (u.onGround) u.y = groundLevel() - FOOT_OFFSET;
+      });
+    }
+
+    function addUnicorn() {
+      const u = { x: 0, y: 0, w: 40, h: 30, vy: 0, angle: 0, flapTimer: 0, onGround: true, player: unicorns.length };
+      unicorns.push(u);
+      placeUnicorns();
+      return u;
+    }
+
     function resize() {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
       width = canvas.width;
       height = canvas.height;
-      unicorn.x = width * 0.25;
-      if (unicorn.onGround) unicorn.y = groundLevel() - FOOT_OFFSET;
+      placeUnicorns();
     }
     window.addEventListener('resize', resize);
     resize();
+    const firstUnicorn = addUnicorn();
 
     function spawnCloud(x) {
       clouds.push({
@@ -103,8 +250,8 @@
     }
 
     function spawnItem() {
-      const isRainbow = Math.random() < RAINBOW_CHANCE;
-      const size = isRainbow ? RAINBOW_SIZE : ITEM_SIZE;
+      const isPrize = Math.random() < PRIZE_CHANCE;
+      const size = isPrize ? PRIZE_SIZE : ITEM_SIZE;
       const lowest = groundLevel() - size / 2 - 10;
       const highest = 70;
       // Some items sit low enough to collect while running
@@ -114,7 +261,7 @@
         x: width + size,
         y: y,
         size: size,
-        emoji: isRainbow ? '🌈' : TREATS[Math.floor(Math.random() * TREATS.length)],
+        emoji: isPrize ? theme.prize : theme.treats[Math.floor(Math.random() * theme.treats.length)],
         bobPhase: Math.random() * Math.PI * 2
       });
     }
@@ -127,13 +274,14 @@
           vx: (Math.random() - 0.5) * 5,
           vy: (Math.random() - 0.5) * 5,
           life: 30 + Math.random() * 20,
-          color: `hsl(${Math.random()*360},80%,70%)`,
+          color: theme.sparkleColor(),
           size: 3 + Math.random() * 4
         });
       }
     }
 
-    function flap() {
+    function flap(unicorn) {
+      unlockAudio();
       hintEl.classList.add('hidden');
       unicorn.vy = FLAP_STRENGTH;
       unicorn.flapTimer = 10;
@@ -146,6 +294,7 @@
       scoreEl.textContent = score;
       spawnParticles(item.x, item.y, 16);
       popups.push({ x: item.x, y: item.y, life: 40 });
+      playSound(item.emoji);
     }
 
     function update() {
@@ -156,25 +305,7 @@
       if (clouds.length < 10 && Math.random() < 0.01) spawnCloud(width + 50);
       clouds = clouds.filter(c => c.x + c.w > -50);
 
-      // Unicorn physics
-      if (!unicorn.onGround) {
-        unicorn.vy = Math.min(unicorn.vy + GRAVITY, MAX_FALL_SPEED);
-        unicorn.y += unicorn.vy;
-      }
-      unicorn.angle = unicorn.onGround ? 0 : unicorn.vy * 0.05;
-      if (unicorn.flapTimer > 0) unicorn.flapTimer--;
-
-      // Ground landing
-      if (unicorn.y + FOOT_OFFSET >= groundLevel()) {
-        unicorn.y = groundLevel() - FOOT_OFFSET;
-        unicorn.vy = 0;
-        unicorn.onGround = true;
-      }
-      // Ceiling
-      if (unicorn.y - unicorn.h/2 < 0) {
-        unicorn.y = unicorn.h/2;
-        unicorn.vy = 0;
-      }
+      unicorns.forEach(updateUnicorn);
 
       // Items
       if (frame % ITEM_SPAWN_RATE === 0) spawnItem();
@@ -182,8 +313,8 @@
         item.x -= WORLD_SPEED;
         item.y += Math.sin(frame * 0.06 + item.bobPhase) * 0.3;
       });
-      const reached = item =>
-        Math.hypot(item.x - unicorn.x, item.y - unicorn.y) < item.size / 2 + COLLECT_MARGIN;
+      const reached = item => unicorns.some(unicorn =>
+        Math.hypot(item.x - unicorn.x, item.y - unicorn.y) < item.size / 2 + COLLECT_MARGIN);
       items.filter(reached).forEach(collect);
       items = items.filter(item => !reached(item) && item.x + item.size > 0);
 
@@ -203,23 +334,44 @@
       });
       popups = popups.filter(p => p.life > 0);
 
-      // Rainbow trail
+      // Rainbow (or slime) trail
       if (frame % 5 === 0) {
-        particles.push({
+        unicorns.forEach(unicorn => particles.push({
           x: unicorn.x - 10,
           y: unicorn.y,
           vx: -1,
           vy: 0,
           life: 40,
-          color: `hsl(${(frame * 2) % 360},80%,70%)`,
+          color: theme.trailColor(),
           size: 4
-        });
+        }));
+      }
+    }
+
+    function updateUnicorn(unicorn) {
+      if (!unicorn.onGround) {
+        unicorn.vy = Math.min(unicorn.vy + GRAVITY, MAX_FALL_SPEED);
+        unicorn.y += unicorn.vy;
+      }
+      unicorn.angle = unicorn.onGround ? 0 : unicorn.vy * 0.05;
+      if (unicorn.flapTimer > 0) unicorn.flapTimer--;
+
+      // Ground landing
+      if (unicorn.y + FOOT_OFFSET >= groundLevel()) {
+        unicorn.y = groundLevel() - FOOT_OFFSET;
+        unicorn.vy = 0;
+        unicorn.onGround = true;
+      }
+      // Ceiling
+      if (unicorn.y - unicorn.h/2 < 0) {
+        unicorn.y = unicorn.h/2;
+        unicorn.vy = 0;
       }
     }
 
     // --- Drawing ---
     function drawCloud(c) {
-      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.fillStyle = theme.cloud;
       ctx.beginPath();
       ctx.arc(c.x, c.y, c.w * 0.3, 0, Math.PI * 2);
       ctx.arc(c.x + c.w * 0.25, c.y - c.w * 0.1, c.w * 0.35, 0, Math.PI * 2);
@@ -230,12 +382,12 @@
     function drawGround() {
       const gh = GROUND_HEIGHT;
       const y = height - gh;
-      ctx.fillStyle = '#8B5A2B';
+      ctx.fillStyle = theme.ground.soil;
       ctx.fillRect(0, y, width, gh);
-      ctx.fillStyle = '#4CAF50';
+      ctx.fillStyle = theme.ground.top;
       ctx.fillRect(0, y, width, 12);
       // stripes
-      ctx.fillStyle = '#6D4C41';
+      ctx.fillStyle = theme.ground.stripe;
       for (let i = -((frame * WORLD_SPEED) % 40); i < width; i += 40) {
         ctx.fillRect(i, y + 12, 20, gh - 12);
       }
@@ -248,8 +400,8 @@
       ctx.stroke();
     }
 
-    function drawLegs(u) {
-      ctx.strokeStyle = '#fff';
+    function drawLegs(u, color) {
+      ctx.strokeStyle = color;
       ctx.lineWidth = 3;
       ctx.lineCap = 'round';
       if (u.onGround) {
@@ -296,6 +448,7 @@
     }
 
     function drawUnicorn(u) {
+      const palette = theme.palettes[u.player];
       ctx.save();
       // Bounce along while galloping
       const bounce = u.onGround ? Math.abs(Math.sin(frame * 0.35)) * -2 : 0;
@@ -303,7 +456,7 @@
       ctx.rotate(u.angle);
 
       // Body
-      ctx.fillStyle = '#fff';
+      ctx.fillStyle = palette.body;
       ctx.beginPath();
       ctx.ellipse(0, 0, u.w/2, u.h/2, 0, 0, Math.PI*2);
       ctx.fill();
@@ -346,21 +499,21 @@
       ctx.stroke();
 
       // Mane
-      ctx.fillStyle = '#E040FB';
+      ctx.fillStyle = palette.mane[0];
       ctx.beginPath();
       ctx.arc(-2, -10, 7, 0, Math.PI*2);
       ctx.fill();
-      ctx.fillStyle = '#00BCD4';
+      ctx.fillStyle = palette.mane[1];
       ctx.beginPath();
       ctx.arc(-6, -6, 5, 0, Math.PI*2);
       ctx.fill();
-      ctx.fillStyle = '#FF4081';
+      ctx.fillStyle = palette.mane[2];
       ctx.beginPath();
       ctx.arc(-4, -2, 4, 0, Math.PI*2);
       ctx.fill();
 
       // Ear
-      ctx.fillStyle = '#fff';
+      ctx.fillStyle = palette.body;
       ctx.beginPath();
       ctx.ellipse(8, -16, 3, 5, -0.3, 0, Math.PI*2);
       ctx.fill();
@@ -369,8 +522,72 @@
       ctx.ellipse(8, -16, 1.5, 3, -0.3, 0, Math.PI*2);
       ctx.fill();
 
-      drawLegs(u);
+      drawLegs(u, '#fff');
       drawWing(u);
+
+      ctx.restore();
+    }
+
+    function drawMonster(u) {
+      const palette = theme.palettes[u.player];
+      ctx.save();
+      // Bounce along while running
+      const bounce = u.onGround ? Math.abs(Math.sin(frame * 0.35)) * -2 : 0;
+      ctx.translate(u.x, u.y + bounce);
+      ctx.rotate(u.angle);
+
+      // Bat wing, raised while flapping
+      const tip = u.onGround ? 2 : (u.flapTimer > 0 ? -24 : 4);
+      ctx.fillStyle = palette.wing;
+      ctx.beginPath();
+      ctx.moveTo(-2, -6);
+      ctx.lineTo(-28, tip);
+      ctx.lineTo(-22, tip + 10);
+      ctx.lineTo(-15, tip + 6);
+      ctx.lineTo(-9, tip + 12);
+      ctx.lineTo(-2, 4);
+      ctx.closePath();
+      ctx.fill();
+
+      // Horns
+      ctx.fillStyle = palette.horns;
+      ctx.beginPath();
+      ctx.moveTo(-12, -10); ctx.lineTo(-13, -27); ctx.lineTo(-3, -15);
+      ctx.moveTo(3, -15); ctx.lineTo(13, -27); ctx.lineTo(12, -10);
+      ctx.fill();
+
+      // Furry round body
+      ctx.fillStyle = palette.body;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 18, 16, 0, 0, Math.PI*2);
+      ctx.fill();
+
+      // One big eye
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(5, -4, 7, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = '#333';
+      ctx.beginPath();
+      ctx.arc(7, -4, 3.5, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(8, -5.5, 1.2, 0, Math.PI*2);
+      ctx.fill();
+
+      // Grin with two little fangs
+      ctx.fillStyle = '#333';
+      ctx.beginPath();
+      ctx.arc(5, 6, 6, 0, Math.PI);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.moveTo(1, 6); ctx.lineTo(3, 6); ctx.lineTo(2, 9);
+      ctx.moveTo(7, 6); ctx.lineTo(9, 6); ctx.lineTo(8, 9);
+      ctx.fill();
+
+      drawLegs(u, palette.wing);
 
       ctx.restore();
     }
@@ -417,8 +634,8 @@
       });
       ctx.globalAlpha = 1;
 
-      // Unicorn
-      drawUnicorn(unicorn);
+      // Unicorns (or monsters)
+      unicorns.forEach(u => theme.draw(u));
 
       // Popups
       popups.forEach(drawPopup);
@@ -428,10 +645,11 @@
     let elapsed = 0;
 
     function loop(now) {
+      pollGamepads();
       elapsed += Math.min(now - lastTime, 100); // don't race to catch up after a hidden tab
       lastTime = now;
       while (elapsed >= STEP_MS) {
-        update();
+        if (started) update();
         elapsed -= STEP_MS;
       }
       draw();
@@ -439,12 +657,69 @@
     }
 
     // --- Input ---
+    // The first choice picks the theme and starts the game. Controllers are counted then,
+    // and each gets its own unicorn. Browsers can hide controllers until one of their buttons
+    // is pressed on the page, so any that were missed join on their first A press.
+    // Space and tap always fly the first unicorn.
+    let started = false;
+
+    function assignController(pad) {
+      if (gamepadUnicorns.has(pad.index) || gamepadUnicorns.size >= MAX_CONTROLLERS) return;
+      gamepadUnicorns.set(pad.index, gamepadUnicorns.size === 0 ? firstUnicorn : addUnicorn());
+    }
+
+    function start(themeName) {
+      started = true;
+      theme = THEMES[themeName];
+      document.body.style.background = theme.sky;
+      menuEl.classList.add('hidden');
+      hintEl.textContent = theme.hint;
+      hintEl.classList.remove('hidden');
+      unlockAudio();
+      Array.from(navigator.getGamepads()).filter(Boolean).forEach(assignController);
+    }
+
+    document.getElementById('choose-unicorns').addEventListener('click', () => start('unicorns'));
+    document.getElementById('choose-monsters').addEventListener('click', () => start('monsters'));
+
     window.addEventListener('keydown', (e) => {
+      if (!started) {
+        if (e.code === 'KeyU') start('unicorns');
+        if (e.code === 'KeyM') start('monsters');
+        return;
+      }
       if (e.code !== 'Space') return;
       e.preventDefault();
-      if (!e.repeat) flap();
+      if (!e.repeat) flap(firstUnicorn);
     });
-    window.addEventListener('pointerdown', flap);
+    window.addEventListener('pointerdown', () => {
+      if (started) flap(firstUnicorn);
+    });
+
+    function buttonJustPressed(pad, button) {
+      const key = `${pad.index}:${button}`;
+      const pressed = pad.buttons[button]?.pressed ?? false;
+      const wasPressed = gamepadButtonWasPressed.get(key) ?? false;
+      gamepadButtonWasPressed.set(key, pressed);
+      return pressed && !wasPressed;
+    }
+
+    function pollGamepads() {
+      for (const pad of navigator.getGamepads()) {
+        if (!pad) continue;
+        const a = buttonJustPressed(pad, GAMEPAD_A);
+        const b = buttonJustPressed(pad, GAMEPAD_B);
+        if (!started) {
+          if (a) start('unicorns');
+          else if (b) start('monsters');
+          continue;
+        }
+        if (!a) continue;
+        assignController(pad);
+        const unicorn = gamepadUnicorns.get(pad.index);
+        if (unicorn) flap(unicorn);
+      }
+    }
 
     // Start loop
     requestAnimationFrame(loop);
