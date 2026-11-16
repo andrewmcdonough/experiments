@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#ffd6ec">
+  <title>Verliebte Zahlen</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --pink: #ff4f9a;
+      --purple: #7a4dff;
+      --ink: #4a2a6a;
+      --right: #2ec27e;
+      --wrong: #ff3b3b;
+    }
+
+    html, body { height: 100%; }
+
+    body {
+      font-family: 'Fredoka', system-ui, sans-serif;
+      color: var(--ink);
+      background: linear-gradient(180deg, #bfe6ff 0%, #e6dcff 45%, #ffd6ec 100%);
+      overflow: hidden;
+      overscroll-behavior: none;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+
+    main {
+      height: 100dvh;
+      max-width: 480px;
+      margin: 0 auto;
+      padding: calc(env(safe-area-inset-top) + 12px) 16px calc(env(safe-area-inset-bottom) + 16px);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    header { text-align: center; }
+    h1 { font-size: 1.6rem; color: var(--pink); }
+
+    #progress {
+      display: flex;
+      justify-content: center;
+      gap: 4px;
+      margin-top: 6px;
+      font-size: 1.3rem;
+    }
+    #progress span { opacity: .25; transition: opacity .3s, transform .3s; }
+    #progress span.done { opacity: 1; transform: scale(1.15); }
+
+    /* ---------- Equation ---------- */
+    #board {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      position: relative;
+    }
+
+    #unicorn { font-size: 4rem; line-height: 1; transition: transform .3s; }
+    #unicorn.happy { animation: hop .6s ease; }
+
+    #equation {
+      display: flex;
+      align-items: center;
+      gap: .25em;
+      font-size: clamp(3rem, 16vw, 4.5rem);
+      font-weight: 700;
+      background: rgba(255, 255, 255, .8);
+      border-radius: 28px;
+      padding: .15em .45em;
+      box-shadow: 0 6px 0 rgba(122, 77, 255, .25);
+      transition: background .2s;
+    }
+    #equation .num { color: var(--purple); }
+    #equation .op { color: var(--pink); }
+    #blank {
+      display: inline-block;
+      min-width: 1.1em;
+      text-align: center;
+      border-bottom: .08em solid var(--pink);
+      color: var(--right);
+      line-height: 1.1;
+    }
+    #equation.wrong { background: #ffd0d0; animation: shake .4s ease; }
+    #equation.right { background: #d4f7e4; }
+
+    #message { min-height: 1.6em; font-size: 1.4rem; font-weight: 600; color: var(--pink); }
+
+    /* ---------- Number pad ---------- */
+    #pad {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    #pad button {
+      font: inherit;
+      font-size: 2.4rem;
+      font-weight: 700;
+      color: #fff;
+      aspect-ratio: 1.35;
+      border: none;
+      border-radius: 22px;
+      background: linear-gradient(180deg, #b48cff, var(--purple));
+      box-shadow: 0 6px 0 #5a2fd6;
+      cursor: pointer;
+      transition: transform .08s, box-shadow .08s;
+    }
+    #pad button:nth-child(3n+1) { background: linear-gradient(180deg, #ff8cc2, var(--pink)); box-shadow: 0 6px 0 #d62f7a; }
+    #pad button:nth-child(3n+3) { background: linear-gradient(180deg, #6fd6ff, #2c9ee8); box-shadow: 0 6px 0 #1a76b8; }
+    #pad button:active { transform: translateY(4px); box-shadow: 0 2px 0 rgba(0, 0, 0, .2); }
+    #pad button.wrong { background: var(--wrong) !important; box-shadow: 0 6px 0 #b51f1f !important; animation: flash .25s 3; }
+    #pad button.right { background: var(--right) !important; box-shadow: 0 6px 0 #1c8a57 !important; }
+    #pad.locked { pointer-events: none; }
+
+    /* ---------- End screen ---------- */
+    #end {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(255, 214, 236, .85);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+    }
+    #end.show { display: flex; }
+    #end .card {
+      background: #fff;
+      border-radius: 32px;
+      padding: 28px 24px;
+      width: 100%;
+      max-width: 360px;
+      text-align: center;
+      box-shadow: 0 10px 0 rgba(122, 77, 255, .25);
+    }
+    #end .big { font-size: 4.5rem; line-height: 1.1; }
+    #end h2 { font-size: 2rem; color: var(--pink); margin: 8px 0 16px; }
+    .stats { display: flex; gap: 12px; margin-bottom: 20px; }
+    .stat { flex: 1; border-radius: 20px; padding: 12px 8px; font-size: 1.1rem; font-weight: 600; }
+    .stat b { display: block; font-size: 2.6rem; }
+    .stat.right { background: #d4f7e4; color: #1c8a57; }
+    .stat.wrong { background: #ffe0e0; color: #c02626; }
+    #again {
+      font: inherit;
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #fff;
+      width: 100%;
+      padding: 16px;
+      border: none;
+      border-radius: 22px;
+      background: linear-gradient(90deg, #ff4f9a, #ffb13c, #2ec27e, #2c9ee8, #7a4dff);
+      box-shadow: 0 6px 0 #5a2fd6;
+      cursor: pointer;
+    }
+    #again:active { transform: translateY(4px); box-shadow: 0 2px 0 #5a2fd6; }
+
+    /* ---------- Hearts ---------- */
+    .heart {
+      position: absolute;
+      font-size: 2rem;
+      pointer-events: none;
+      animation: float 1.1s ease-out forwards;
+    }
+
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      20%, 60% { transform: translateX(-12px); }
+      40%, 80% { transform: translateX(12px); }
+    }
+    @keyframes flash { 50% { filter: brightness(1.5); } }
+    @keyframes hop {
+      30% { transform: translateY(-24px) rotate(-8deg); }
+      60% { transform: translateY(0) rotate(4deg); }
+    }
+    @keyframes float {
+      from { transform: translate(0, 0) scale(.6); opacity: 1; }
+      to { transform: translate(var(--dx), -160px) scale(1.3); opacity: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>💕 Verliebte Zahlen 💕</h1>
+      <div id="progress"></div>
+    </header>
+
+    <section id="board">
+      <div id="unicorn">🦄</div>
+      <div id="equation">
+        <span class="num" id="given"></span>
+        <span class="op">+</span>
+        <span id="blank"></span>
+        <span class="op">=</span>
+        <span class="num">10</span>
+      </div>
+      <div id="message"></div>
+    </section>
+
+    <section id="pad"></section>
+  </main>
+
+  <div id="end">
+    <div class="card">
+      <div class="big">🦄🌈</div>
+      <h2>Geschafft!</h2>
+      <div class="stats">
+        <div class="stat right"><b id="rightCount">0</b>richtig</div>
+        <div class="stat wrong"><b id="wrongCount">0</b>falsch</div>
+      </div>
+      <button id="again">Nochmal spielen</button>
+    </div>
+  </div>
+
+  <script>
+    const ROUNDS = 10;
+    const TARGET = 10;
+    const NEXT_DELAY = 1100;
+    const PRAISE = ['Super!', 'Toll!', 'Prima!', 'Klasse!', 'Juhu!', 'Spitze!'];
+    const RETRY = 'Versuch es nochmal!';
+
+    const $ = id => document.getElementById(id);
+    const pad = $('pad');
+    const equation = $('equation');
+
+    let questions, round, rightCount, wrongCount;
+
+    // ---------- Questions ----------
+    // Each round asks for the partner of a number from 1 to 9, never the same number twice in a row
+    function makeQuestions() {
+      const list = [];
+      while (list.length < ROUNDS) {
+        const n = 1 + Math.floor(Math.random() * 9);
+        if (n !== list[list.length - 1]) list.push(n);
+      }
+      return list;
+    }
+
+    // ---------- Sound ----------
+    let audio;
+    function unlockAudio() {
+      if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+      if (audio.state === 'suspended') audio.resume();
+    }
+
+    function tone(freq, start, length, type = 'sine', volume = .25) {
+      const osc = audio.createOscillator();
+      const gain = audio.createGain();
+      const t = audio.currentTime + start;
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(volume, t + .02);
+      gain.gain.exponentialRampToValueAtTime(.001, t + length);
+      osc.connect(gain).connect(audio.destination);
+      osc.start(t);
+      osc.stop(t + length);
+    }
+
+    function playRight() {
+      [523, 659, 784, 1047].forEach((f, i) => tone(f, i * .09, .35, 'triangle'));
+    }
+
+    function playWrong() {
+      tone(220, 0, .18, 'square', .12);
+      tone(180, .16, .25, 'square', .12);
+    }
+
+    function playFanfare() {
+      [523, 659, 784, 659, 784, 1047].forEach((f, i) => tone(f, i * .14, .4, 'triangle'));
+    }
+
+    // ---------- Game ----------
+    function buildPad() {
+      for (let n = 1; n <= 9; n++) {
+        const button = document.createElement('button');
+        button.textContent = n;
+        button.addEventListener('click', () => answer(n, button));
+        pad.appendChild(button);
+      }
+    }
+
+    function buildProgress() {
+      $('progress').innerHTML = '<span>🦄</span>'.repeat(ROUNDS);
+    }
+
+    function showRound() {
+      const given = questions[round];
+      $('given').textContent = given;
+      $('blank').textContent = ' ';
+      $('message').textContent = '';
+      equation.classList.remove('right', 'wrong');
+      pad.querySelectorAll('button').forEach(b => b.classList.remove('right', 'wrong'));
+      pad.classList.remove('locked');
+    }
+
+    function answer(n, button) {
+      unlockAudio();
+      const correct = TARGET - questions[round];
+
+      if (n !== correct) {
+        wrongCount++;
+        playWrong();
+        $('message').textContent = RETRY;
+        // Restart the flash and shake even if the same wrong number is tapped again
+        button.classList.remove('wrong');
+        equation.classList.remove('wrong');
+        void button.offsetWidth;
+        button.classList.add('wrong');
+        equation.classList.add('wrong');
+        return;
+      }
+
+      rightCount++;
+      pad.classList.add('locked');
+      button.classList.add('right');
+      equation.classList.remove('wrong');
+      equation.classList.add('right');
+      $('blank').textContent = n;
+      $('message').textContent = PRAISE[Math.floor(Math.random() * PRAISE.length)];
+      $('progress').children[round].classList.add('done');
+      cheer();
+      playRight();
+
+      setTimeout(() => {
+        round++;
+        if (round < ROUNDS) showRound();
+        else finish();
+      }, NEXT_DELAY);
+    }
+
+    function cheer() {
+      const unicorn = $('unicorn');
+      unicorn.classList.remove('happy');
+      void unicorn.offsetWidth;
+      unicorn.classList.add('happy');
+
+      const board = $('board');
+      const rect = equation.getBoundingClientRect();
+      const boardRect = board.getBoundingClientRect();
+      for (let i = 0; i < 8; i++) {
+        const heart = document.createElement('div');
+        heart.className = 'heart';
+        heart.textContent = ['💖', '💕', '✨', '🌈'][i % 4];
+        heart.style.left = `${rect.left - boardRect.left + Math.random() * rect.width - 16}px`;
+        heart.style.top = `${rect.top - boardRect.top}px`;
+        heart.style.setProperty('--dx', `${(Math.random() - .5) * 120}px`);
+        heart.style.animationDelay = `${i * 40}ms`;
+        board.appendChild(heart);
+        heart.addEventListener('animationend', () => heart.remove());
+      }
+    }
+
+    function finish() {
+      $('rightCount').textContent = rightCount;
+      $('wrongCount').textContent = wrongCount;
+      $('end').classList.add('show');
+      playFanfare();
+    }
+
+    function newGame() {
+      questions = makeQuestions();
+      round = 0;
+      rightCount = 0;
+      wrongCount = 0;
+      buildProgress();
+      $('end').classList.remove('show');
+      showRound();
+    }
+
+    $('again').addEventListener('click', () => { unlockAudio(); newGame(); });
+
+    buildPad();
+    newGame();
+  </script>
+</body>
+</html>

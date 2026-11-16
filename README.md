@@ -21,3 +21,4 @@ A few experimental projects.
 * [silben-einhorn](https://experiments.andrewmcdonough.com/silben-einhorn/): Unicorn syllable slot machine — pull the rainbow lever to spin start, vowel and end reels, read the German syllable aloud and collect stars for rainbows
 * [berlin-marathon](https://experiments.andrewmcdonough.com/berlin-marathon/): Run the Berlin Marathon — alternate A and S to run past Berlin landmarks, manage your stamina to avoid hitting the wall, and race the ghost of the course record
 * [unicorn-rainbows](https://experiments.andrewmcdonough.com/unicorn-rainbows/): A gentle flying unicorn game for little ones — no way to lose, press space to fly, run along the ground and collect rainbows and treats for points
+* [verliebte-zahlen](https://experiments.andrewmcdonough.com/verliebte-zahlen/): Unicorn number bonds to 10 for iPhone — tap the missing partner in sums like 8 + _ = 10, ten random sums per game with a count of right and wrong tries at the end
