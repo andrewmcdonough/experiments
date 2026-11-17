@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Rainbow Meadow</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #87CEEB;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      touch-action: none;
+    }
+    canvas { display: block; width: 100%; height: 100%; }
+    #hint {
+      position: absolute;
+      top: 30%; left: 0; width: 100%;
+      padding: 0 16px;
+      text-align: center;
+      font-size: 1.8rem;
+      color: #fff;
+      text-shadow: 2px 2px 0 #333;
+      pointer-events: none;
+      transition: opacity 1s;
+    }
+    #hint small { display: block; font-size: 1.1rem; margin-top: 0.5rem; }
+  </style>
+  <!-- Character sprites are made locally by tools/make_sprites.py and kept out of git.
+       Without them the game draws placeholder characters. -->
+  <script src="sprites/sprites.js"></script>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="hint">🌈 Press 🅰 to join!<small>Keyboard: W A S D and ← ↑ →</small></div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const hintEl = document.getElementById('hint');
+
+    // --- Constants (in world units; the screen is always VIEW_H units tall) ---
+    const STEP_MS = 1000 / 60; // fixed update rate, so 120Hz screens don't run double speed
+    const VIEW_H = 540;
+    const GROUND_Y = 480;
+    const GRAVITY = 0.6;
+    const JUMP_SPEED = -13;
+    const JUMP_CUT_SPEED = -4; // letting go of jump early makes a smaller hop
+    const MAX_FALL_SPEED = 14;
+    const RUN_SPEED = 4.5;
+    const RUN_ACCEL = 0.6;
+    const COYOTE_FRAMES = 6; // can still jump just after walking off a ledge
+    const JUMP_BUFFER_FRAMES = 8; // a jump pressed just before landing still counts
+    const SPRITE_SCALE = 0.5; // sprites are drawn at half size so they stay sharp on retina screens
+    const WALK_FRAME_DISTANCE = 16; // distance walked per animation frame
+    const EDGE_MARGIN = 30; // how close to the screen edge players can go
+    const PLATFORM_HEIGHT = 22;
+    const TIER_1 = 110; // platform heights above the ground
+    const TIER_2 = 220;
+    const ITEM_SIZE = 40;
+    const PRIZE_SIZE = 56;
+    const COLLECT_REACH = 28;
+    const GAMEPAD_A = 0;
+    const GAMEPAD_LEFT = 14;
+    const GAMEPAD_RIGHT = 15;
+    const STICK_DEADZONE = 0.35;
+
+    const TREATS = ['🧸', '⭐', '💖', '🦋', '🌸', '🍓', '🧁', '🎀', '🍭', '🐰'];
+    const PRIZES = ['🌈', '🦄'];
+
+    // Placeholder characters for when the sprite files aren't there
+    const PLACEHOLDERS = {
+      floral: { height: 105, colour: '#E57373', hair: '#F2D16B' },
+      dots: { height: 128, colour: '#3F51B5', hair: '#B08850' },
+    };
+
+    // --- Sound ---
+    // Each item has its own little tune: notes are [frequency Hz, start s, length s],
+    // with an optional fourth value to glide the pitch to by the end of the note.
+    const SOUNDS = {
+      '🌈': { wave: 'sine',     notes: [[523, 0, 0.3], [659, 0.07, 0.3], [784, 0.14, 0.3], [1047, 0.21, 0.3], [1319, 0.28, 0.5], [1568, 0.35, 0.6]] },
+      '🦄': { wave: 'sine',     notes: [[600, 0, 0.4, 1600], [1568, 0.3, 0.2], [2093, 0.38, 0.4]] },
+      '🧸': { wave: 'sine',     notes: [[330, 0, 0.18], [392, 0.15, 0.3]] },
+      '⭐': { wave: 'triangle', notes: [[1568, 0, 0.15], [2093, 0.06, 0.15], [2637, 0.12, 0.3]] },
+      '💖': { wave: 'sine',     notes: [[659, 0, 0.2], [880, 0.15, 0.4]] },
+      '🦋': { wave: 'triangle', notes: [[1175, 0, 0.06], [1397, 0.06, 0.06], [1175, 0.12, 0.06], [1397, 0.18, 0.06], [1760, 0.24, 0.2]] },
+      '🌸': { wave: 'triangle', notes: [[880, 0, 0.3], [1319, 0.1, 0.5]] },
+      '🍓': { wave: 'square',   notes: [[600, 0, 0.1, 900]] },
+      '🧁': { wave: 'square',   notes: [[523, 0, 0.08], [784, 0.08, 0.08], [1047, 0.16, 0.12]] },
+      '🎀': { wave: 'triangle', notes: [[1568, 0, 0.12], [1319, 0.08, 0.12], [1175, 0.16, 0.3]] },
+      '🍭': { wave: 'sine',     notes: [[400, 0, 0.35, 1200]] },
+      '🐰': { wave: 'sine',     notes: [[500, 0, 0.1, 700], [600, 0.13, 0.12, 850]] },
+    };
+    const JUMP_SOUND = { wave: 'sine', volume: 0.06, notes: [[300, 0, 0.15, 600]] };
+    const SOUND_VOLUME = 0.15;
+    let audio = null;
+
+    // Browsers only allow sound after the player has pressed something
+    function unlockAudio() {
+      if (!audio) audio = new AudioContext();
+      if (audio.state === 'suspended') audio.resume();
+    }
+
+    function playSound(sound) {
+      if (!audio || !sound) return;
+      const now = audio.currentTime;
+      const volume = sound.volume ?? SOUND_VOLUME;
+      sound.notes.forEach(([freq, start, length, glideTo]) => {
+        const osc = audio.createOscillator();
+        const gain = audio.createGain();
+        const t = now + start;
+        osc.type = sound.wave;
+        osc.frequency.setValueAtTime(freq, t);
+        if (glideTo) osc.frequency.exponentialRampToValueAtTime(glideTo, t + length);
+        // Quick fade in, then a bell-like decay
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.exponentialRampToValueAtTime(volume, t + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + length);
+        osc.connect(gain).connect(audio.destination);
+        osc.start(t);
+        osc.stop(t + length);
+      });
+    }
+
+    // --- Characters ---
+    function loadCharacter(name) {
+      const sprite = window.SPRITES?.[name];
+      if (!sprite) return { name, placeholder: PLACEHOLDERS[name] };
+      const frames = {};
+      for (const [frame, src] of Object.entries(sprite.frames)) {
+        frames[frame] = new Image();
+        frames[frame].src = src;
+      }
+      return { name, sprite, frames };
+    }
+
+    function makePlayer(name, x, keys) {
+      const character = loadCharacter(name);
+      const height = character.sprite ? character.sprite.bodyHeight * SPRITE_SCALE : character.placeholder.height;
+      const width = character.sprite ? character.sprite.bodyWidth * SPRITE_SCALE * 0.6 : height * 0.4;
+      return {
+        character, keys, width, height,
+        x, y: GROUND_Y, vx: 0, vy: 0,
+        onGround: true, facing: 1, walked: 0, squash: 0,
+        coyote: 0, jumpBuffer: 0, jumpWasHeld: false,
+        score: 0, gamepad: null,
+      };
+    }
+
+    // Younger girl on WASD (left of the keyboard), older girl on the arrow keys
+    const players = [
+      makePlayer('floral', 150, { left: 'KeyA', right: 'KeyD', jump: 'KeyW' }),
+      makePlayer('dots', 230, { left: 'ArrowLeft', right: 'ArrowRight', jump: 'ArrowUp' }),
+    ];
+
+    // --- World ---
+    let frame = 0;
+    let camX = 0;
+    let viewW = 960;
+    let scale = 1;
+    let platforms = [];
+    let items = [];
+    let scenery = [];
+    let clouds = [];
+    let particles = [];
+    let popups = [];
+    let generatedTo = 0;
+    let cloudsTo = 0;
+
+    function resize() {
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.round(window.innerWidth * dpr);
+      canvas.height = Math.round(window.innerHeight * dpr);
+      scale = canvas.height / VIEW_H;
+      viewW = canvas.width / scale;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    const rand = (min, max) => min + Math.random() * (max - min);
+    const pick = list => list[Math.floor(Math.random() * list.length)];
+
+    function addItem(x, y, emoji = pick(TREATS)) {
+      const size = PRIZES.includes(emoji) ? PRIZE_SIZE : ITEM_SIZE;
+      items.push({ x, y: y - size / 2, size, emoji, bobPhase: Math.random() * Math.PI * 2 });
+    }
+
+    function addPlatform(x, width, height) {
+      const p = { x, y: GROUND_Y - height, width };
+      platforms.push(p);
+      return p;
+    }
+
+    function addRowOfItems(x, y, count, spacing = 50) {
+      for (let i = 0; i < count; i++) addItem(x + i * spacing, y - 10);
+    }
+
+    function addScenery(fromX, toX) {
+      for (let x = fromX + rand(0, 120); x < toX; x += rand(90, 220)) {
+        const kind = pick(['tree', 'tree', 'bush', 'flowers', 'flowers']);
+        scenery.push({ kind, x, size: rand(0.8, 1.25), hue: pick([0, 45, 200, 280, 330]) });
+      }
+    }
+
+    // The level is made up of sections generated just ahead of the camera
+    const SECTIONS = {
+      meadow(x) {
+        const width = rand(320, 480);
+        addRowOfItems(x + 60, GROUND_Y, Math.floor(rand(3, 6)));
+        return width;
+      },
+      platform(x) {
+        const p = addPlatform(x + 80, rand(170, 260), TIER_1);
+        addRowOfItems(p.x + 30, p.y, Math.floor(p.width / 60));
+        return p.width + 200;
+      },
+      stairs(x) {
+        const low = addPlatform(x + 60, rand(170, 220), TIER_1);
+        const high = addPlatform(low.x + low.width - 40, rand(170, 240), TIER_2);
+        addRowOfItems(low.x + 30, low.y, 2);
+        addItem(high.x + high.width / 2, high.y - 10, pick(PRIZES));
+        return high.x + high.width - x + 160;
+      },
+      arc(x) {
+        // Treats in a curve, reached by jumping
+        for (let i = 0; i < 5; i++) {
+          const lift = Math.sin((i / 4) * Math.PI) * 90;
+          addItem(x + 60 + i * 45, GROUND_Y - 30 - lift);
+        }
+        return 340;
+      },
+      steps(x) {
+        // Small hops along a line of low and high platforms
+        let px = x + 60;
+        for (let i = 0; i < 3; i++) {
+          const p = addPlatform(px, 140, i % 2 ? TIER_2 - 30 : TIER_1);
+          addItem(p.x + p.width / 2, p.y - 10, i === 1 ? pick(PRIZES) : undefined);
+          px += p.width + 60;
+        }
+        return px - x + 100;
+      },
+    };
+
+    function generateLevel(untilX) {
+      while (generatedTo < untilX) {
+        const start = generatedTo;
+        const section = generatedTo < 600 ? 'meadow' : pick(Object.keys(SECTIONS));
+        generatedTo += SECTIONS[section](generatedTo);
+        addScenery(start, generatedTo);
+      }
+    }
+
+    function generateClouds() {
+      // Clouds live in their own slower-scrolling space for parallax
+      const visibleTo = camX * 0.15 + viewW + 200;
+      while (cloudsTo < visibleTo) {
+        clouds.push({ x: cloudsTo, y: rand(30, 200), w: rand(70, 140) });
+        cloudsTo += rand(180, 360);
+      }
+    }
+
+    function spawnParticles(x, y, count) {
+      for (let i = 0; i < count; i++) {
+        particles.push({
+          x, y,
+          vx: (Math.random() - 0.5) * 6,
+          vy: (Math.random() - 0.5) * 6,
+          life: 30 + Math.random() * 20,
+          color: `hsl(${Math.random() * 360},80%,70%)`,
+          size: 3 + Math.random() * 4,
+        });
+      }
+    }
+
+    // --- Input ---
+    const keysDown = new Set();
+    window.addEventListener('keydown', (e) => {
+      const used = players.some(p => Object.values(p.keys).includes(e.code));
+      if (!used) return;
+      e.preventDefault();
+      unlockAudio();
+      keysDown.add(e.code);
+    });
+    window.addEventListener('keyup', (e) => keysDown.delete(e.code));
+    window.addEventListener('blur', () => keysDown.clear());
+
+    // Controllers join on their first A press, taking the next girl without one
+    const gamepadPlayers = new Map();
+
+    function joinGamepads() {
+      for (const pad of navigator.getGamepads()) {
+        if (!pad || gamepadPlayers.has(pad.index) || !pad.buttons[GAMEPAD_A]?.pressed) continue;
+        const player = players.find(p => p.gamepad === null);
+        if (!player) continue;
+        player.gamepad = pad.index;
+        gamepadPlayers.set(pad.index, player);
+        unlockAudio();
+      }
+    }
+
+    function readInput(player) {
+      const input = {
+        left: keysDown.has(player.keys.left),
+        right: keysDown.has(player.keys.right),
+        jump: keysDown.has(player.keys.jump),
+      };
+      const pad = player.gamepad !== null ? navigator.getGamepads()[player.gamepad] : null;
+      if (pad) {
+        const stick = pad.axes[0] ?? 0;
+        input.left ||= stick < -STICK_DEADZONE || !!pad.buttons[GAMEPAD_LEFT]?.pressed;
+        input.right ||= stick > STICK_DEADZONE || !!pad.buttons[GAMEPAD_RIGHT]?.pressed;
+        input.jump ||= !!pad.buttons[GAMEPAD_A]?.pressed;
+      }
+      return input;
+    }
+
+    // --- Update ---
+    function updatePlayer(p) {
+      const input = readInput(p);
+      if (input.left || input.right || input.jump) hintEl.style.opacity = 0;
+
+      // Running
+      const target = (input.right ? RUN_SPEED : 0) - (input.left ? RUN_SPEED : 0);
+      p.vx += Math.max(-RUN_ACCEL, Math.min(RUN_ACCEL, target - p.vx));
+      if (target !== 0) p.facing = Math.sign(target);
+
+      // Jumping, with a little forgiveness on timing
+      const jumpPressed = input.jump && !p.jumpWasHeld;
+      p.jumpWasHeld = input.jump;
+      p.jumpBuffer = jumpPressed ? JUMP_BUFFER_FRAMES : Math.max(0, p.jumpBuffer - 1);
+      p.coyote = p.onGround ? COYOTE_FRAMES : Math.max(0, p.coyote - 1);
+      if (p.jumpBuffer > 0 && p.coyote > 0) {
+        p.vy = JUMP_SPEED;
+        p.onGround = false;
+        p.jumpBuffer = 0;
+        p.coyote = 0;
+        playSound(JUMP_SOUND);
+      }
+      if (!input.jump && p.vy < JUMP_CUT_SPEED) p.vy = JUMP_CUT_SPEED;
+
+      // Moving, kept on screen
+      p.x += p.vx;
+      p.x = Math.max(camX + EDGE_MARGIN, Math.min(camX + viewW - EDGE_MARGIN, p.x));
+      if (Math.abs(p.vx) > 0.3) p.walked += Math.abs(p.vx);
+
+      // Falling and landing (platforms can be jumped up through from below)
+      const wasOnGround = p.onGround;
+      const prevY = p.y;
+      p.vy = Math.min(p.vy + GRAVITY, MAX_FALL_SPEED);
+      p.y += p.vy;
+      p.onGround = false;
+      if (p.vy >= 0) {
+        if (p.y >= GROUND_Y) {
+          p.y = GROUND_Y;
+          p.onGround = true;
+        }
+        for (const plat of platforms) {
+          const over = p.x + p.width / 2 > plat.x && p.x - p.width / 2 < plat.x + plat.width;
+          if (over && prevY <= plat.y && p.y >= plat.y) {
+            p.y = plat.y;
+            p.onGround = true;
+          }
+        }
+      }
+      if (p.onGround) {
+        p.vy = 0;
+        if (!wasOnGround) p.squash = 6;
+      }
+      if (p.squash > 0) p.squash--;
+
+      // Collecting
+      items = items.filter(item => {
+        const dx = Math.abs(item.x - p.x);
+        const dy = Math.abs(item.y - (p.y - p.height / 2));
+        if (dx > p.width / 2 + COLLECT_REACH || dy > p.height / 2 + COLLECT_REACH) return true;
+        p.score++;
+        playSound(SOUNDS[item.emoji]);
+        spawnParticles(item.x, item.y, 16);
+        popups.push({ x: item.x, y: item.y, life: 40 });
+        return false;
+      });
+    }
+
+    function update() {
+      frame++;
+      joinGamepads();
+      players.forEach(updatePlayer);
+
+      // The camera follows the pair and never scrolls back
+      const middle = players.reduce((sum, p) => sum + p.x, 0) / players.length;
+      camX = Math.max(camX, middle - viewW * 0.4);
+      generateLevel(camX + viewW * 2);
+      generateClouds();
+
+      // Forget anything well behind the camera
+      const behind = camX - 300;
+      platforms = platforms.filter(p => p.x + p.width > behind);
+      items = items.filter(i => i.x > behind);
+      scenery = scenery.filter(s => s.x > behind);
+      clouds = clouds.filter(c => c.x + c.w > camX * 0.15 - 100);
+
+      items.forEach(item => item.y += Math.sin(frame * 0.06 + item.bobPhase) * 0.2);
+
+      particles.forEach(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life--;
+        p.size *= 0.95;
+      });
+      particles = particles.filter(p => p.life > 0);
+
+      popups.forEach(p => {
+        p.y -= 1;
+        p.life--;
+      });
+      popups = popups.filter(p => p.life > 0);
+    }
+
+    // --- Drawing ---
+    function drawSky() {
+      const sky = ctx.createLinearGradient(0, 0, 0, VIEW_H);
+      sky.addColorStop(0, '#6EC6FF');
+      sky.addColorStop(1, '#E1F5FE');
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, viewW, VIEW_H);
+
+      // Sun
+      ctx.fillStyle = '#FFF59D';
+      ctx.beginPath();
+      ctx.arc(viewW - 110, 90, 50, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#FFEB3B';
+      ctx.beginPath();
+      ctx.arc(viewW - 110, 90, 38, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawClouds() {
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      clouds.forEach(c => {
+        const x = c.x - camX * 0.15;
+        ctx.beginPath();
+        ctx.arc(x, c.y, c.w * 0.3, 0, Math.PI * 2);
+        ctx.arc(x + c.w * 0.25, c.y - c.w * 0.1, c.w * 0.35, 0, Math.PI * 2);
+        ctx.arc(x + c.w * 0.5, c.y, c.w * 0.3, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function drawHills(parallax, baseY, colour, seed) {
+      ctx.fillStyle = colour;
+      ctx.beginPath();
+      ctx.moveTo(0, VIEW_H);
+      for (let sx = 0; sx <= viewW + 10; sx += 10) {
+        const wx = sx + camX * parallax + seed;
+        ctx.lineTo(sx, baseY - Math.sin(wx * 0.004) * 35 - Math.sin(wx * 0.011) * 15);
+      }
+      ctx.lineTo(viewW, VIEW_H);
+      ctx.fill();
+    }
+
+    function drawTree(x, size) {
+      const h = 150 * size;
+      ctx.fillStyle = '#795548';
+      ctx.fillRect(x - 8 * size, GROUND_Y - h * 0.55, 16 * size, h * 0.55);
+      ctx.fillStyle = '#43A047';
+      ctx.beginPath();
+      ctx.arc(x, GROUND_Y - h * 0.7, 45 * size, 0, Math.PI * 2);
+      ctx.arc(x - 30 * size, GROUND_Y - h * 0.55, 32 * size, 0, Math.PI * 2);
+      ctx.arc(x + 30 * size, GROUND_Y - h * 0.55, 32 * size, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#66BB6A';
+      ctx.beginPath();
+      ctx.arc(x - 12 * size, GROUND_Y - h * 0.78, 18 * size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawBush(x, size) {
+      ctx.fillStyle = '#388E3C';
+      ctx.beginPath();
+      ctx.arc(x - 18 * size, GROUND_Y - 14 * size, 20 * size, Math.PI, 0);
+      ctx.arc(x + 4 * size, GROUND_Y - 22 * size, 24 * size, Math.PI, 0);
+      ctx.arc(x + 26 * size, GROUND_Y - 12 * size, 18 * size, Math.PI, 0);
+      ctx.fill();
+    }
+
+    function drawFlowers(x, size, hue) {
+      for (let i = 0; i < 3; i++) {
+        const fx = x + i * 14 * size;
+        const fy = GROUND_Y - (16 + (i % 2) * 8) * size;
+        ctx.strokeStyle = '#2E7D32';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(fx, GROUND_Y);
+        ctx.lineTo(fx, fy);
+        ctx.stroke();
+        ctx.fillStyle = `hsl(${hue + i * 20},85%,70%)`;
+        ctx.beginPath();
+        ctx.arc(fx, fy, 6 * size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#FFEB3B';
+        ctx.beginPath();
+        ctx.arc(fx, fy, 2.5 * size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawScenery(s) {
+      if (s.kind === 'tree') drawTree(s.x, s.size);
+      else if (s.kind === 'bush') drawBush(s.x, s.size);
+      else drawFlowers(s.x, s.size, s.hue);
+    }
+
+    function drawGround() {
+      const left = camX - 20;
+      ctx.fillStyle = '#8D6E63';
+      ctx.fillRect(left, GROUND_Y, viewW + 40, VIEW_H - GROUND_Y);
+      // Pebbles that scroll with the ground
+      ctx.fillStyle = '#6D4C41';
+      for (let x = Math.floor(left / 60) * 60; x < camX + viewW + 60; x += 60) {
+        ctx.beginPath();
+        ctx.arc(x + 20, GROUND_Y + 30, 5, 0, Math.PI * 2);
+        ctx.arc(x + 45, GROUND_Y + 48, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      drawGrass(left, GROUND_Y, viewW + 40);
+    }
+
+    function drawGrass(x, y, width) {
+      ctx.fillStyle = '#7CB342';
+      ctx.fillRect(x, y, width, 14);
+      ctx.fillStyle = '#9CCC65';
+      ctx.fillRect(x, y, width, 5);
+      // Tufts along the top edge
+      ctx.fillStyle = '#7CB342';
+      for (let tx = Math.ceil(x / 16) * 16; tx < x + width - 6; tx += 16) {
+        ctx.beginPath();
+        ctx.moveTo(tx, y + 1);
+        ctx.lineTo(tx + 4, y - 6);
+        ctx.lineTo(tx + 8, y + 1);
+        ctx.fill();
+      }
+    }
+
+    function drawPlatform(p) {
+      ctx.fillStyle = '#8D6E63';
+      ctx.beginPath();
+      ctx.roundRect(p.x, p.y, p.width, PLATFORM_HEIGHT, [4, 4, 12, 12]);
+      ctx.fill();
+      drawGrass(p.x, p.y, p.width);
+    }
+
+    function drawItem(item) {
+      ctx.font = `${item.size}px serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(item.emoji, item.x, item.y);
+    }
+
+    function spriteFrame(p) {
+      if (!p.onGround) return 'jump';
+      if (Math.abs(p.vx) < 0.3) return 'stand';
+      // stride, pass, stride, pass
+      return Math.floor(p.walked / WALK_FRAME_DISTANCE) % 2 === 0 ? 'walk' : 'stand';
+    }
+
+    function drawPlayer(p) {
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.scale(p.facing, 1);
+      const squash = p.squash > 0 ? 1 - p.squash * 0.015 : 1;
+      ctx.scale(2 - squash, squash);
+
+      const { sprite, frames, placeholder } = p.character;
+      const image = frames?.[spriteFrame(p)];
+      if (image?.complete && image.naturalWidth) {
+        const walking = p.onGround && Math.abs(p.vx) >= 0.3;
+        const bob = walking && spriteFrame(p) === 'stand' ? -2 : 0;
+        ctx.drawImage(image,
+          -sprite.footX * SPRITE_SCALE, -sprite.footY * SPRITE_SCALE + bob,
+          sprite.width * SPRITE_SCALE, sprite.height * SPRITE_SCALE);
+      } else {
+        drawPlaceholder(placeholder ?? PLACEHOLDERS[p.character.name], p);
+      }
+      ctx.restore();
+    }
+
+    function drawPlaceholder(look, p) {
+      const h = look.height;
+      ctx.fillStyle = look.colour;
+      ctx.beginPath();
+      ctx.roundRect(-h * 0.18, -h * 0.62, h * 0.36, h * 0.5, 10);
+      ctx.fill();
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 5;
+      ctx.lineCap = 'round';
+      const swing = p.onGround ? Math.sin(p.walked * 0.15) * 8 : 6;
+      ctx.beginPath();
+      ctx.moveTo(-6, -h * 0.14); ctx.lineTo(-6 + swing, 0);
+      ctx.moveTo(6, -h * 0.14); ctx.lineTo(6 - swing, 0);
+      ctx.stroke();
+      ctx.fillStyle = look.hair;
+      ctx.beginPath();
+      ctx.arc(0, -h * 0.78, h * 0.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#FFCCBC';
+      ctx.beginPath();
+      ctx.arc(h * 0.04, -h * 0.76, h * 0.15, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawPopup(p) {
+      ctx.globalAlpha = p.life / 40;
+      ctx.font = 'bold 26px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 3;
+      ctx.strokeText('+1', p.x, p.y);
+      ctx.fillText('+1', p.x, p.y);
+      ctx.globalAlpha = 1;
+    }
+
+    // Each girl's face and score in her corner
+    function drawScore(p, corner) {
+      const x = corner === 'left' ? 20 : viewW - 20;
+      const align = corner === 'left' ? 1 : -1;
+      const { sprite, frames } = p.character;
+      const face = frames?.stand;
+      const size = 56;
+      if (face?.complete && face.naturalWidth) {
+        // Top of the standing sprite is the head
+        const crop = sprite.width;
+        ctx.drawImage(face, 0, 0, crop, crop, corner === 'left' ? x : x - size, 12, size, size);
+      } else {
+        ctx.fillStyle = PLACEHOLDERS[p.character.name].hair;
+        ctx.beginPath();
+        ctx.arc(x + align * size / 2, 40, size / 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.font = 'bold 40px sans-serif';
+      ctx.textAlign = corner;
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 5;
+      const label = `${p.score}${p.gamepad !== null ? ' 🎮' : ''}`;
+      const tx = x + align * (size + 10);
+      ctx.strokeText(label, tx, 42);
+      ctx.fillText(label, tx, 42);
+    }
+
+    function draw() {
+      ctx.setTransform(scale, 0, 0, scale, 0, 0);
+      drawSky();
+      drawClouds();
+      drawHills(0.2, 380, '#A5D6A7', 0);
+      drawHills(0.45, 430, '#81C784', 900);
+
+      ctx.save();
+      ctx.translate(-camX, 0);
+      scenery.forEach(drawScenery);
+      drawGround();
+      platforms.forEach(drawPlatform);
+      items.forEach(drawItem);
+      particles.forEach(p => {
+        ctx.globalAlpha = p.life / 40;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      ctx.globalAlpha = 1;
+      players.forEach(drawPlayer);
+      popups.forEach(drawPopup);
+      ctx.restore();
+
+      drawScore(players[0], 'left');
+      drawScore(players[1], 'right');
+    }
+
+    let lastTime = performance.now();
+    let elapsed = 0;
+
+    function loop(now) {
+      elapsed += Math.min(now - lastTime, 100); // don't race to catch up after a hidden tab
+      lastTime = now;
+      while (elapsed >= STEP_MS) {
+        update();
+        elapsed -= STEP_MS;
+      }
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    generateLevel(viewW * 2);
+    generateClouds();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
